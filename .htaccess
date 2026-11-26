@@ -1,0 +1,9 @@
+# বই-ডেটা ও পেমেন্ট ফাইল সরাসরি ডাউনলোড বন্ধ (প্রোডাকশনে Apache/LiteSpeed-এর জন্য)
+<FilesMatch "^(books\.json|payments\.json|config\.local\.php|.*\.bak)$">
+    Require all denied
+</FilesMatch>
+
+# সম্পূর্ণ বইয়ের মূল ফাইল সরাসরি ডাউনলোড বন্ধ
+<FilesMatch "\.docx?$">
+    Require all denied
+</FilesMatch>

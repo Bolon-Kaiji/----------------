@@ -1,0 +1,445 @@
+/* =====================================================================
+   BOOK VIEWER MODULE: styles | book-viewer-preview/book-viewer.css
+   Mythoscopedia-style reader: sticky left TOC + right reading area.
+   Self-contained; works standalone or inside the site shell.
+   Copy this folder to reuse as a template for a new book style;
+   change the [data-bv-theme] palette block near the bottom.
+   ===================================================================== */
+
+:root { --ms-header-h: 0px; --ms-shadow: rgba(0, 0, 0, 0.08); }
+
+.bv-page {
+  --bv-accent: var(--accent, #dc2626);
+  --bv-accent-soft: var(--accent-bg, #fee2e2);
+  --bv-border: var(--border-theme, #e2e8f0);
+  --bv-card: var(--bg-card, #ffffff);
+  --bv-ink: var(--text-main, #1f2937);
+  --bv-muted: var(--text-muted, #6b7280);
+  --bv-serif: "Times New Roman", "SolaimanLipi", "SiteSolaimanLipi", Times, serif;
+  --bv-toc-w: 17rem;
+
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 1.25rem clamp(0.8rem, 3vw, 2rem) 4rem;
+  background: var(--bg-body, #f4f5f7);
+  color: var(--bv-ink);
+  font-family: var(--bv-serif);
+}
+.bv-page *, .bv-page *::before, .bv-page *::after { box-sizing: border-box; }
+
+.bv {
+  max-width: 82rem;
+  margin: 0 auto;
+  color: var(--bv-ink);
+  font-family: var(--bv-serif);
+}
+
+/* ---------- toolbar ---------- */
+
+.bv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--bv-card);
+  border: 1px solid var(--bv-border);
+  border-radius: 0.9rem;
+  box-shadow: 0 6px 18px var(--ms-shadow);
+}
+.bv-toolbar-group { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; min-width: 0; }
+.bv-title { font-size: 1.15rem; font-weight: 700; line-height: 1.3; margin: 0; }
+
+.bv-btn {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.5rem 0.95rem; border-radius: 0.6rem;
+  border: 1px solid var(--bv-border); background: var(--bv-card); color: var(--bv-ink);
+  font: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+.bv-btn:hover { background: var(--bv-accent-soft); color: var(--bv-accent); }
+.bv-btn-primary { background: var(--bv-accent); color: #fff; border-color: var(--bv-accent); }
+.bv-btn-primary:hover { background: var(--accent-hover, var(--bv-accent)); color: #fff; }
+.bv-btn[hidden] { display: none; }
+
+.bv-select {
+  padding: 0.45rem 0.7rem; border-radius: 0.6rem; border: 1px solid var(--bv-border);
+  background: var(--bv-card); color: var(--bv-ink); font: inherit; font-size: 0.88rem;
+}
+.bv-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* ---------- layout ---------- */
+
+.bv-layout {
+  display: grid;
+  grid-template-columns: var(--bv-toc-w) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+  max-width: 82rem;
+  margin: 0 auto;
+}
+
+/* ---------- table of contents ---------- */
+
+.bv-toc {
+  position: sticky;
+  top: 0.5rem;
+  max-height: calc(100vh - 1.5rem);
+  display: flex; flex-direction: column;
+  background: var(--bv-card);
+  border: 1px solid var(--bv-border);
+  border-radius: 0.9rem;
+  overflow: hidden;
+}
+.bv-toc-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--bv-border);
+  font-weight: 700; font-size: 0.95rem;
+}
+.bv-toc-head .bv-toc-toggle {
+  border: 0; background: none; color: var(--bv-muted); cursor: pointer;
+  font: inherit; padding: 0.15rem 0.4rem; border-radius: 0.4rem;
+}
+.bv-toc-head .bv-toc-toggle:hover { color: var(--bv-accent); }
+.bv-toc-body { overflow-y: auto; padding: 0.5rem 0.5rem 1rem 0.1rem; flex: 1 1 auto; }
+.bv-toc-list { list-style: none; margin: 0; padding: 0; }
+.bv-toc-list ul { list-style: none; margin: 0.15rem 0 0.15rem 0.9rem; padding: 0; border-left: 1px solid var(--bv-border); }
+.bv-toc-list li { margin: 0; }
+.bv-toc-list a {
+  display: flex; align-items: baseline; gap: 0.4rem;
+  padding: 0.28rem 0.5rem 0.28rem 0.2rem; border-radius: 0.45rem;
+  color: var(--bv-ink); text-decoration: none; font-size: 0.88rem; line-height: 1.35;
+  transition: background-color 0.12s, color 0.12s;
+}
+.bv-toc-text { flex: 1 1 auto; min-width: 0; }
+.bv-toc-page { flex: none; color: var(--bv-muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.bv-toc-list a.active .bv-toc-page { color: var(--bv-accent); }
+.bv-toc-list a.bv-lvl-chapter { font-weight: 700; font-size: 0.95rem; margin-top: 0.35rem; }
+.bv-toc-list a.bv-lvl-chapter .bv-toc-text { color: var(--bv-ink); }
+.bv-toc-list a.bv-lvl-part .bv-toc-text { font-weight: 600; }
+.bv-toc-list a.bv-lvl-sub { font-size: 0.84rem; }
+.bv-toc-list a.bv-lvl-sub .bv-toc-text { color: var(--bv-muted); }
+.bv-toc-list a:hover { background: var(--bv-accent-soft); color: var(--bv-accent); }
+.bv-toc-list a.active {
+  background: var(--bv-accent-soft); color: var(--bv-accent); font-weight: 700;
+  box-shadow: inset 3px 0 0 var(--bv-accent);
+}
+.bv-toc-empty { color: var(--bv-muted); font-size: 0.85rem; padding: 0.5rem; }
+
+/* ---------- সূচি: ধরনভেদে রং + কলাপ্স/এক্সপ্যান্ড তীর ---------- */
+
+/* কলাপ্স/এক্সপ্যান্ড তীর (যাদের সাব-শিরোনাম আছে) */
+.bv-toc-list .bv-toc-caret {
+  flex: none; align-self: center;
+  width: 1.15em; height: 1.15em; margin: 0; padding: 0;
+  border: 0; border-radius: 0.3rem;
+  background: none; color: var(--bv-muted); cursor: pointer;
+  font: inherit; line-height: 1; font-size: 0.72em;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background-color 0.12s, color 0.12s;
+}
+.bv-toc-list .bv-toc-caret:hover { color: var(--bv-accent); background: var(--bv-accent-soft); }
+.bv-toc-list ul.bv-collapsed { display: none; }
+
+/* ধরনভেদে ভিন্ন রং — সাধারণ লেখা থেকে আলাদা বোঝা যায় */
+.bv-toc-list a.bv-t-chapter .bv-toc-text { color: #1e3a8a; }
+.bv-toc-list a.bv-t-part .bv-toc-text    { color: #0369a1; }
+.bv-toc-list a.bv-t-section .bv-toc-text { color: #0f766e; }
+.bv-toc-list a.bv-t-sub .bv-toc-text     { color: #6d28d9; }
+.bv-toc-list a.bv-t-note .bv-toc-text    { color: #b45309; }
+.bv-toc-list a.bv-t-source .bv-toc-text  { color: #be123c; }
+.bv-toc-list a.bv-t-readmore .bv-toc-text { color: #15803d; }
+.bv-toc-list a.bv-t-extlink .bv-toc-text { color: #c2410c; }
+
+/* পরিশিষ্ট/অনুসন্ধান — হালকা খয়েরি, কলাপস-তীর ছাড়া */
+.bv-toc-list a.bv-t-appendix .bv-toc-text { color: #a97142; }
+.bv-toc-list a.bv-lvl-appendix { font-size: 0.9rem; margin-top: 0.15rem; }
+.bv-toc-list a.bv-lvl-appendix .bv-toc-text { font-weight: 600; }
+
+/* অ্যাক্টিভ/হোভারে ধরনের রং বহাল রেখে হালকা হাইলাইট */
+.bv-toc-list a.bv-t-chapter .bv-toc-text,
+.bv-toc-list a.bv-t-part .bv-toc-text,
+.bv-toc-list a.bv-t-section .bv-toc-text,
+.bv-toc-list a.bv-t-sub .bv-toc-text,
+.bv-toc-list a.bv-t-note .bv-toc-text,
+.bv-toc-list a.bv-t-source .bv-toc-text,
+.bv-toc-list a.bv-t-readmore .bv-toc-text,
+.bv-toc-list a.bv-t-extlink .bv-toc-text { font-weight: 600; }
+.bv-toc-list a.bv-lvl-chapter .bv-toc-text { font-weight: 700; }
+.bv-toc-list a.active .bv-toc-text { text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---------- article ---------- */
+
+.bv-article {
+  background: var(--bv-card);
+  border: 1px solid var(--bv-border);
+  border-radius: 0.9rem;
+  padding: 2rem clamp(1.1rem, 4vw, 3.25rem) 3rem;
+  min-height: 20rem;
+  box-shadow: 0 6px 22px var(--ms-shadow);
+  overflow-wrap: anywhere;
+}
+.bv-article > *:first-child { margin-top: 0; }
+
+.bv-article h1, .bv-article h2, .bv-article h3,
+.bv-article h4, .bv-article h5, .bv-article h6 {
+  font-family: var(--bv-serif);
+  line-height: 1.3;
+  scroll-margin-top: 1rem;
+  text-wrap: balance;
+}
+.bv-article h1 {
+  font-size: 2rem; font-weight: 700; margin: 0 0 1.2rem;
+  padding-bottom: 0.4rem; border-bottom: 1px solid var(--bv-border);
+}
+.bv-article h2 {
+  font-size: 1.55rem; font-weight: 700; margin: 2.2rem 0 0.8rem;
+  padding-bottom: 0.3rem; border-bottom: 1px solid var(--bv-border);
+}
+.bv-article h3 { font-size: 1.28rem; font-weight: 700; margin: 1.8rem 0 0.6rem; }
+.bv-article h4 { font-size: 1.1rem; font-weight: 700; margin: 1.4rem 0 0.5rem; }
+.bv-article h5, .bv-article h6 { font-size: 1rem; font-weight: 700; margin: 1.2rem 0 0.4rem; }
+
+.bv-article p {
+  margin: 0 0 1rem;
+  font-size: 1.06rem;
+  line-height: 1.85;
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
+}
+.bv-article a { color: var(--bv-accent); text-decoration: none; }
+.bv-article a:hover { text-decoration: underline; }
+
+.bv-article ul, .bv-article ol { margin: 0 0 1.1rem; padding-left: 1.6rem; }
+.bv-article li { margin: 0.25rem 0; line-height: 1.8; font-size: 1.04rem; }
+
+.bv-article blockquote {
+  margin: 1.2rem 0; padding: 0.6rem 1.1rem;
+  border-left: 4px solid var(--bv-accent);
+  background: var(--bv-accent-soft); color: var(--bv-ink);
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+.bv-article blockquote p:last-child { margin-bottom: 0; }
+
+.bv-article hr { border: 0; border-top: 1px solid var(--bv-border); margin: 1.8rem 0; }
+
+.bv-article code {
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 0.92em; background: var(--bv-accent-soft);
+  padding: 0.1em 0.4em; border-radius: 0.35rem;
+}
+.bv-article img { max-width: 100%; height: auto; border-radius: 0.5rem; }
+
+/* ---------- টেবিল ---------- */
+.bv-article .bv-table-wrap {
+  margin: 1.2rem 0;
+  border: 1px solid var(--bv-border);
+  border-radius: 0.65rem;
+  overflow-x: auto;
+  background: var(--bv-card);
+  box-shadow: 0 3px 12px var(--ms-shadow);
+}
+.bv-article .bv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.bv-article .bv-table th,
+.bv-article .bv-table td {
+  border: 1px solid var(--bv-border);
+  padding: 0.5rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+.bv-article .bv-table thead th {
+  background: var(--bv-accent-soft);
+  color: var(--bv-accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.bv-article .bv-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bv-accent-soft) 40%, var(--bv-card));
+}
+.bv-article .bv-table tbody tr:hover td { background: var(--bv-accent-soft); }
+@media (max-width: 560px) {
+  .bv-article .bv-table { font-size: 0.88rem; }
+  .bv-article .bv-table th, .bv-article .bv-table td { padding: 0.4rem 0.5rem; }
+}
+
+/* ---------- ডান পাশ: মিথোস্কোপিডিয়া-ধাঁচের তথ্যছক (infobox) ---------- */
+/* float:right — মূল পাঠ বামের দিকে চাপা পড়ে; মূল সাইটে নেওয়ার সময় যেন না ভাঙে
+   সব ক্লাস .bv- প্রিফিক্সড, শুধু .bv-article-এর ভেতরে সীমাবদ্ধ। */
+
+.bv-article .bv-infobox {
+  float: right;
+  width: 20rem;
+  max-width: 46%;
+  margin: 0.25rem 0 1.3rem 1.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+/* প্রতিটি অংশ নিজের আলাদা কার্ড — প্রচ্ছদ ও লেখক আলাদা বসে */
+.bv-article .bv-infobox > * {
+  background: var(--bv-card);
+  border: 1px solid var(--bv-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 14px var(--ms-shadow);
+  overflow: hidden;
+}
+
+/* প্রচ্ছদের বক্স */
+.bv-article .bv-infobox .bv-ib-cover {
+  margin: 0;
+  padding: 0.5rem;
+}
+.bv-article .bv-infobox .bv-ib-cover img {
+  display: block; width: 100%; height: auto;
+  border-radius: 0.5rem;
+}
+.bv-article .bv-infobox .bv-ib-cover figcaption {
+  margin-top: 0.45rem; text-align: center;
+  color: var(--bv-ink); font-size: 1.15rem; font-weight: 700; line-height: 1.35;
+}
+
+/* লেখকের বক্স */
+.bv-article .bv-infobox .bv-ib-author {
+  display: flex; align-items: center; gap: 0.65rem;
+  margin: 0; padding: 0.65rem 0.7rem;
+}
+.bv-article .bv-infobox .bv-ib-author-photo {
+  width: 3.6rem; height: 3.6rem; flex: none;
+  object-fit: cover; border-radius: 50%;
+}
+.bv-article .bv-infobox .bv-ib-author-meta { min-width: 0; }
+.bv-article .bv-infobox .bv-ib-label { color: var(--bv-muted); font-size: 0.76rem; }
+.bv-article .bv-infobox .bv-ib-author-name { font-weight: 700; color: var(--bv-ink); }
+
+/* প্রকাশনা-তথ্যের বক্স (লেখক-ছবির নিচে) */
+.bv-article .bv-infobox .bv-ib-colophon { margin: 0; padding: 0.7rem 0.8rem; }
+.bv-article .bv-infobox .bv-colophon-title {
+  font-weight: 700; text-align: center; color: var(--bv-ink);
+  font-size: 0.95rem; line-height: 1.4;
+  margin: 0 0 0.55rem; padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--bv-border);
+}
+.bv-article .bv-infobox .bv-colophon-row {
+  display: grid; grid-template-columns: 5.4rem minmax(0, 1fr);
+  gap: 0.12rem 0.55rem;
+  padding: 0.32rem 0;
+  border-bottom: 1px dashed var(--bv-border);
+}
+.bv-article .bv-infobox .bv-colophon-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.bv-article .bv-infobox .bv-colophon-label {
+  margin: 0; color: var(--bv-muted); font-weight: 700; font-size: 0.78rem; line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.bv-article .bv-infobox .bv-colophon-value {
+  margin: 0; color: var(--bv-ink); font-size: 0.82rem; line-height: 1.5; min-width: 0;
+}
+.bv-article .bv-infobox .bv-colophon-line { display: block; }
+
+/* ---------- ডান পাশ: রূপরেখা scaffold ---------- */
+
+.bv-banner {
+  margin: 0 0 1.5rem; padding: 0.75rem 1rem;
+  border: 1px dashed var(--bv-border); border-radius: 0.7rem;
+  background: var(--bv-accent-soft); color: var(--bv-muted);
+  font-size: 0.9rem; line-height: 1.6;
+}
+.bv-article .bv-book-title { font-size: 2rem; font-weight: 700; margin: 0 0 0.3rem; }
+.bv-article .bv-book-sub { color: var(--bv-muted); font-size: 0.95rem; margin: 0 0 1.5rem; }
+.bv-chapter { margin: 0; }
+.bv-article .bv-o-chapter { font-size: 1.5rem; font-weight: 700; margin: 1.8rem 0 0.7rem; }
+.bv-article .bv-o-part { font-size: 1.2rem; font-weight: 700; color: var(--bv-accent); margin: 1.2rem 0 0.4rem; }
+.bv-article .bv-o-sec { font-size: 1.02rem; font-weight: 600; margin: 0.7rem 0 0.25rem; }
+.bv-article .bv-o-sub { font-size: 0.92rem; font-weight: 400; color: var(--bv-muted); margin: 0.35rem 0 0.15rem; }
+
+/* ---------- empty / drop states ---------- */
+
+.bv-drop {
+  border: 2px dashed var(--bv-border);
+  border-radius: 1rem;
+  padding: clamp(2rem, 8vw, 4.5rem) 1.5rem;
+  text-align: center;
+  color: var(--bv-muted);
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.bv.drop-on .bv-drop, .bv-drop.hot { border-color: var(--bv-accent); background: var(--bv-accent-soft); color: var(--bv-accent); }
+.bv-drop h2 { font-size: 1.3rem; color: var(--bv-ink); margin: 0 0 0.5rem; border: 0; padding: 0; }
+.bv-drop p { margin: 0.3rem 0; line-height: 1.7; }
+.bv-drop .bv-btn { margin-top: 1rem; }
+
+/* ---------- progress ---------- */
+
+.bv-progress {
+  margin: 0 0 1rem; padding: 0.7rem 1rem;
+  border: 1px solid var(--bv-border); border-radius: 0.7rem; background: var(--bv-card);
+  display: none;
+}
+.bv-progress.show { display: block; }
+.bv-progress-track { height: 0.5rem; border-radius: 999px; background: var(--bv-accent-soft); overflow: hidden; }
+.bv-progress-bar { height: 100%; width: 0%; background: var(--bv-accent); transition: width 0.12s linear; }
+.bv-progress-label { font-size: 0.82rem; color: var(--bv-muted); margin-top: 0.4rem; }
+
+.bv-status { font-size: 0.82rem; color: var(--bv-muted); }
+.bv-status.err { color: #dc2626; }
+
+/* ---------- theme variants (copy & tweak for a new book style) ---------- */
+
+.bv[data-bv-theme="holy"]      { --bv-accent: #b45309; --bv-accent-soft: #fef3c7; }
+.bv[data-bv-theme="epic"]      { --bv-accent: #4338ca; --bv-accent-soft: #e0e7ff; }
+.bv[data-bv-theme="scripture"] { --bv-accent: #0f766e; --bv-accent-soft: #ccfbf1; }
+.bv[data-bv-theme="theories"]  { --bv-accent: #7c3aed; --bv-accent-soft: #ede9fe; }
+.bv[data-bv-theme="bolon"]     { --bv-accent: #be123c; --bv-accent-soft: #ffe4e6; }
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1100px) {
+  .bv-page { --bv-toc-w: 15rem; }
+}
+
+@media (max-width: 900px) {
+  .bv-layout { grid-template-columns: minmax(0, 1fr); }
+  .bv-toc {
+    position: static; max-height: none; margin-bottom: 0.25rem;
+  }
+  .bv-toc.collapsed .bv-toc-body { display: none; }
+  .bv-article { padding: 1.4rem clamp(1rem, 4vw, 2rem) 2.4rem; }
+  .bv-article h1 { font-size: 1.6rem; }
+  .bv-article h2 { font-size: 1.32rem; }
+  .bv-article .bv-infobox { width: 16rem; max-width: 44%; margin-left: 1rem; }
+}
+
+@media (max-width: 560px) {
+  .bv-toolbar { padding: 0.6rem 0.7rem; }
+  .bv-title { font-size: 1rem; }
+  .bv-article p { font-size: 1.02rem; line-height: 1.8; }
+  /* মোবাইলে infobox float বন্ধ → পুরো প্রস্থে উপরে, যেন লেআউট না ভাঙে */
+  .bv-article .bv-infobox {
+    float: none; width: 100%; max-width: none;
+    margin: 0 0 1.2rem;
+  }
+  .bv-article .bv-infobox .bv-ib-author-photo { width: 3.1rem; height: 3.1rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bv-toc-list a, .bv-btn, .bv-progress-bar { transition: none; }
+}
+
+@media print {
+  .bv-toolbar, .bv-toc, .bv-progress { display: none !important; }
+  .bv-layout { display: block; }
+  .bv-article { border: 0; box-shadow: none; padding: 0; }
+}
