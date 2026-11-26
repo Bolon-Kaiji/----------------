@@ -9,28 +9,6 @@
 <body>
 
 <div class="bv-page">
-
-<!-- নতুন টুলবার (book-reader-ui.html থেকে কপি করা) - পেজ এলাকার ভিতরে, দুই পাশে প্যাডিং -->
-<header class="bv-toolbar" style="position: sticky; top: 0; z-index: 100; background: var(--bv-card); border-bottom: 1px solid var(--bv-border); padding: 8px clamp(14px, 3vw, 40px); display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
-  <div class="bv-toolbar-group" style="display: flex; align-items: center; gap: 12px;">
-    <div>
-      <h1 class="bv-title" data-bv-title style="font-size: 1.2rem; font-weight: 700; margin: 0;">বুক ভিউয়ার</h1>
-    </div>
-  </div>
-  <div class="bv-toolbar-group" style="display: flex; align-items: center; gap: 8px; margin-left: auto;">
-    <span class="bv-status" data-bv-status style="color: var(--bv-muted); font-size: 0.85rem;"></span>
-    <select class="bv-select" data-bv-theme-select aria-label="বইয়ের ধাঁচ" style="padding: 6px 8px; border: 1px solid var(--bv-border); border-radius: 4px; background: var(--bv-card); color: var(--bv-ink); font-size: 13px; font-family: inherit;">
-      <option value="default">সাধারণ</option>
-      <option value="holy">ধর্মীয়</option>
-      <option value="epic">মহাকাব্য</option>
-      <option value="scripture">ধর্মগ্রন্থ</option>
-      <option value="theories">তত্ত্বাবলী</option>
-      <option value="bolon">বলন</option>
-    </select>
-    <button type="button" class="bv-btn bv-btn-primary" data-bv-pick style="padding: 6px 10px; border: 1px solid var(--bv-border); border-radius: 4px; background: var(--bv-accent); color: #fff; font-size: 13px; cursor: pointer; font-family: inherit; font-weight: 700;">ফাইল খুলুন</button>
-    <input type="file" class="bv-file" data-bv-file accept=".docx,.txt,.md,.markdown,text/plain" style="display: none;">
-  </div>
-</header>
     <div class="bv" data-bv-theme="default">
 
       <header class="bv-toolbar">
