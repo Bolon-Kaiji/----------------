@@ -91,9 +91,24 @@ if (isset($_GET['download'])) {
 // লাইভ এডিট ও নতুন অধ্যায় সংরক্ষণ
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['save_edit'])) {
+        $oldPlain = $chapters[$chapIdx]['plain'] ?? '';
+        $editedContent = (string)($_POST['edited_content'] ?? '');
+        // রেন্ডারের সময় স্বয়ংক্রিয়ভাবে যুক্ত হওয়া অধ্যায়-ব্যানার ও মার্কার সরিয়ে মূল কনটেন্ট সংরক্ষণ
+        $editedContent = preg_replace('/<h2\b[^>]*class="[^"]*\bmw-chapter-title\b[^"]*"[^>]*>.*?<\/h2>/su', '', $editedContent);
+        $editedContent = preg_replace('/<a\b[^>]*id="toc-body-start"[^>]*><\/a>/u', '', $editedContent);
+
         $chapters[$chapIdx]['title'] = $_POST['edited_title'];
-        $chapters[$chapIdx]['content'] = $_POST['edited_content'];
-        $chapters[$chapIdx]['plain'] = strip_tags($chapters[$chapIdx]['content']);
+        $chapters[$chapIdx]['content'] = $editedContent;
+
+        $newPlain = htmlToPlainText($editedContent);
+        // মূল বই আপলোডের সময় plain-এ থাকা #-যুক্ত সূচিপত্র ব্লক (যা HTML-এ থাকে না) সংরক্ষণ
+        if (extractTocBlock($newPlain) === '') {
+            $tocBlock = extractTocBlock($oldPlain);
+            if ($tocBlock !== '') {
+                $newPlain = injectTocBlockIntoPlain($newPlain, $tocBlock);
+            }
+        }
+        $chapters[$chapIdx]['plain'] = $newPlain;
         saveChapters($id, $chapters);
     } elseif (isset($_POST['add_chapter'])) {
         $chapters[] = [
@@ -143,6 +158,7 @@ if ($fullAccess) {
     $showLen = (int)floor(mb_strlen($plainFull) * $paidFraction);
     $bodyHtml = mb_substr($plainFull, 0, $showLen);
 }
+$bodyHtml = numberBookNotesInContent($bodyHtml, $isHtml);
 
 // ক্যাটাগরি অনুযায়ী অটো-থিম (উইকিপিডিয়া টেমপ্লেটের সূক্ষ্ম রঙ)
 $catAccents = [
@@ -166,6 +182,61 @@ function extractHeadings($content) {
         if (preg_match('/^\*\*(.+)\*\*$/u', $line, $m)) { $heads[] = trim($m[1]); continue; }
     }
     return $heads;
+}
+
+// HTML কনটেন্ট থেকে প্যারাগ্রাফ/লাইনব্রেক অক্ষুণ্ণ রেখে প্লেইন টেক্সট তৈরি
+function htmlToPlainText($html) {
+    $s = (string)$html;
+    $s = preg_replace('/<br\s*\/?>/iu', "\n", $s);
+    $s = preg_replace('/<\/(?:p|div|h[1-6]|li|tr|blockquote)\b[^>]*>/iu', "\n", $s);
+    $s = strip_tags($s);
+    $s = html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $s = str_replace(["\r\n", "\r"], "\n", $s);
+    $lines = explode("\n", $s);
+    $out = [];
+    foreach ($lines as $line) {
+        $t = trim($line);
+        if ($t !== '') $out[] = $t;
+    }
+    return implode("\n", $out);
+}
+
+// প্লেইন টেক্সট থেকে #-যুক্ত সূচিপত্র ব্লক আলাদা করা
+function extractTocBlock($plain) {
+    $lines = preg_split('/\r\n|\r|\n/', (string)$plain);
+    $n = count($lines);
+    $first = -1; $last = -1;
+    for ($i = 0; $i < $n; $i++) {
+        if (strpos($lines[$i], '#') !== false) {
+            if ($first === -1) $first = $i;
+            $last = $i;
+        }
+    }
+    if ($first === -1 || ($last - $first) < 3) return '';
+    $start = $first;
+    if ($start - 1 >= 0) {
+        $h = trim($lines[$start - 1]);
+        if ($h !== '' && strpos($h, '#') === false && mb_strlen($h) <= 40) $start--;
+    }
+    return implode("\n", array_slice($lines, $start, $last - $start + 1));
+}
+
+// প্লেইন টেক্সটে সূচিপত্র ব্লক পুনরায় সংযুক্ত করা
+function injectTocBlockIntoPlain($plain, $tocBlock) {
+    if ($tocBlock === '') return $plain;
+    $lines = preg_split('/\r\n|\r|\n/', (string)$plain);
+    $insertAt = -1;
+    foreach ($lines as $i => $l) {
+        if (mb_strpos($l, 'সূচিপত্র') !== false) {
+            $insertAt = $i;
+            break;
+        }
+    }
+    if ($insertAt >= 0) {
+        array_splice($lines, $insertAt + 1, 0, explode("\n", $tocBlock));
+        return implode("\n", $lines);
+    }
+    return $tocBlock . "\n" . $plain;
 }
 
 // বইয়ের ভেতরের "সূচিপত্র" অংশ থেকে অধ্যায় ও উপশিরোনাম বের করা
@@ -296,35 +367,121 @@ function tocKey($t) {
 
 $references = $book['references'] ?? [];
 
-// বইয়ের লেখা থেকে গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা সংগ্রহ
+// ইংরেজি সংখ্যাকে বাংলা সংখ্যায় রূপান্তর
+function toBengaliNum($num) {
+    return str_replace(['0','1','2','3','4','5','6','7','8','9'], ['০','১','২','৩','৪','৫','৬','৭','৮','৯'], (string)$num);
+}
+
+// টীকা, নোট, ব্যাখ্যা ও তথ্যসূত্র/সূত্রতথ্য শিরোনাম শনাক্তকরণ
+function classifyBookNoteHeading($line) {
+    $line = trim((string)$line);
+    if ($line === '') return null;
+    if (preg_match('/^টীকা(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?\s*(\(Annotation[^)]*\)|[:\-–].*)?$/u', $line, $m)) {
+        if (!empty($m[1]) || preg_match('/^টীকা(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?$/u', $line)) {
+            return ['type' => 'টীকা', 'en' => 'Annotation'];
+        }
+    }
+    if (preg_match('/^নোট(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?\s*(\(Note[^)]*\)|[:\-–].*)?$/u', $line, $m)) {
+        if (!empty($m[1]) || preg_match('/^নোট(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?$/u', $line)) {
+            return ['type' => 'নোট', 'en' => 'Note'];
+        }
+    }
+    if (preg_match('/^ব্যাখ্যা(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?\s*(\(Explanation[^)]*\)|[:\-–].*)?$/u', $line, $m)) {
+        if (!empty($m[1]) || preg_match('/^ব্যাখ্যা(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?$/u', $line)) {
+            return ['type' => 'ব্যাখ্যা', 'en' => 'Explanation'];
+        }
+    }
+    if (preg_match('/^(?:তথ্যসূত্র|সূত্রতথ্য)(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?\s*(\(References?[^)]*\)|[:\-–].*)?$/u', $line)) {
+        return ['type' => 'সূত্রতথ্য', 'en' => 'References'];
+    }
+    return null;
+}
+
+// মূল লেখায় টীকা, নোট, ব্যাখ্যা ও সূত্রতথ্য শিরোনামে ক্রমিক নম্বর বসানো
+function numberBookNotesInContent($content, $isHtml) {
+    $counters = ['টীকা' => 0, 'নোট' => 0, 'ব্যাখ্যা' => 0, 'সূত্রতথ্য' => 0];
+    $noteIdx = 0;
+    if ($isHtml) {
+        return preg_replace_callback('/<p\b[^>]*>.*?<\/p>/su', function ($match) use (&$counters, &$noteIdx) {
+            $pHtml = $match[0];
+            $plain = trim(html_entity_decode(strip_tags($pHtml), ENT_QUOTES, 'UTF-8'));
+            $plain = preg_replace('/\s+/u', ' ', $plain);
+            $info = classifyBookNoteHeading($plain);
+            if ($info === null) return $pHtml;
+
+            $type = $info['type'];
+            $counters[$type]++;
+            $numEn = $counters[$type];
+            $numBn = toBengaliNum($numEn);
+            $label = $type . ' (' . $numBn . ')';
+            $anchorId = 'mw-note-' . $noteIdx;
+            $noteIdx++;
+
+            $enTag = '';
+            if (preg_match('/\((Annotation|Note|Explanation|References?)[^)]*\)/iu', $plain, $em)) {
+                $enBase = $em[1];
+                $enText = ($type === 'টীকা' && preg_match('/\d/', $em[0]))
+                    ? '(' . $enBase . ' ' . $numEn . ')'
+                    : '(' . $enBase . ')';
+                $enTag = ' <span style="color:#FF00FF;font-size:14pt;">' . htmlspecialchars($enText, ENT_QUOTES, 'UTF-8') . '</span>';
+            }
+
+            $openTag = '<p style="margin:0 0 .6em;">';
+            if (preg_match('/^<p\b[^>]*>/u', $pHtml, $pm)) {
+                $openTag = $pm[0];
+            }
+            $leadingBr = (stripos($pHtml, '<br') !== false) ? '<br>' : '';
+            return $openTag . $leadingBr
+                . '<span id="' . $anchorId . '" class="mw-inline-note-label" style="font-weight:700;color:#0000CC;font-size:14pt;">'
+                . htmlspecialchars($label, ENT_QUOTES, 'UTF-8')
+                . '</span>' . $enTag . '</p>';
+        }, $content);
+    }
+
+    $lines = preg_split('/\r\n|\r|\n/', (string)$content);
+    foreach ($lines as $i => $line) {
+        $t = trim($line);
+        $info = classifyBookNoteHeading($t);
+        if ($info === null) continue;
+        $type = $info['type'];
+        $counters[$type]++;
+        $numBn = toBengaliNum($counters[$type]);
+        $lines[$i] = $type . ' (' . $numBn . ')';
+    }
+    return implode("\n", $lines);
+}
+
+// বইয়ের লেখা থেকে গুরুত্বপূর্ণ টীকা, নোট, ব্যাখ্যা ও সূত্রতথ্য সংগ্রহ
 function extractBookNotes($plain, $book = []) {
     $notes = [];
+    $counters = ['টীকা' => 0, 'নোট' => 0, 'ব্যাখ্যা' => 0, 'সূত্রতথ্য' => 0];
     if (!empty($book['notes']) && is_array($book['notes'])) {
         foreach ($book['notes'] as $n) {
             if (!is_array($n)) continue;
             $t = trim((string)($n['title'] ?? 'টীকা'));
             $b = trim((string)($n['body'] ?? ($n['text'] ?? '')));
             $type = trim((string)($n['type'] ?? 'নোট'));
-            if ($b !== '') $notes[] = ['type' => $type, 'title' => $t, 'body' => $b, 'needle' => $t];
+            if (!isset($counters[$type])) $counters[$type] = 0;
+            $counters[$type]++;
+            $label = $type . ' (' . toBengaliNum($counters[$type]) . ')';
+            if ($b !== '') $notes[] = ['type' => $type, 'label' => $label, 'title' => $t, 'body' => $b, 'needle' => $t, 'anchor' => ''];
         }
     }
     $lines = preg_split('/\r\n|\r|\n/', (string)$plain);
     $n = count($lines);
+    $noteIdx = 0;
     for ($i = 0; $i < $n; $i++) {
         $line = trim($lines[$i]);
         if ($line === '') continue;
-        $type = null;
-        if (preg_match('/^টীকা(?:\s*[-\s]?[০-৯0-9]+)?\s*\(Annotation[^)]*\)$/u', $line)
-            || preg_match('/^টীকা(?:\s*[-\s]?[০-৯0-9]+)?\s*[:\-–]/u', $line)) {
-            $type = 'টীকা';
-        } elseif (preg_match('/^ব্যাখ্যা(?:\s*[-\s]?[০-৯0-9]+)?\s*\(Explanation[^)]*\)$/u', $line)
-            || preg_match('/^ব্যাখ্যা(?:\s*[-\s]?[০-৯0-9]+)?\s*[:\-–]/u', $line)) {
-            $type = 'ব্যাখ্যা';
-        } elseif (preg_match('/^নোট(?:\s*[-\s]?[০-৯0-9]+)?\s*\(Note[^)]*\)$/u', $line)
-            || preg_match('/^নোট(?:\s*[-\s]?[০-৯0-9]+)?\s*[:\-–]/u', $line)) {
-            $type = 'নোট';
-        }
-        if ($type === null) continue;
+        $info = classifyBookNoteHeading($line);
+        if ($info === null) continue;
+        $type = $info['type'];
+        $counters[$type]++;
+        $numBn = toBengaliNum($counters[$type]);
+        $label = $type . ' (' . $numBn . ')';
+        $anchorId = 'mw-note-' . $noteIdx;
+        $noteIdx++;
+
         $body = '';
         for ($j = $i + 1; $j < $n; $j++) {
             $nxt = trim($lines[$j]);
@@ -336,9 +493,11 @@ function extractBookNotes($plain, $book = []) {
         }
         $notes[] = [
             'type' => $type,
-            'title' => $line,
+            'label' => $label,
+            'title' => $label,
             'body' => $body,
             'needle' => mb_substr($body, 0, 45),
+            'anchor' => $anchorId,
         ];
     }
     return $notes;
@@ -736,6 +895,7 @@ if ($fullAccess) {
         }
         .mw-note-item.is-byakhya { border-left-color: #b45309; }
         .mw-note-item.is-note { border-left-color: #0f766e; }
+        .mw-note-item.is-sutra { border-left-color: #4338ca; }
         .mw-note-meta {
             display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap;
         }
@@ -750,6 +910,12 @@ if ($fullAccess) {
         }
         .mw-note-item.is-note .mw-note-badge {
             background: #ccfbf1; color: #115e59; border-color: #5eead4;
+        }
+        .mw-note-item.is-sutra .mw-note-badge {
+            background: #e0e7ff; color: #3730a3; border-color: #a5b4fc;
+        }
+        .mw-inline-note-label {
+            scroll-margin-top: 4.5rem;
         }
         .mw-note-heading {
             font-size: .8rem; font-weight: 700; color: #0f172a; line-height: 1.3;
@@ -1129,30 +1295,32 @@ if ($fullAccess) {
                 </div>
                 <?php endif; ?>
 
-                <!-- ৪. গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা বক্স (নিচ পর্যন্ত বিস্তৃত) -->
+                <!-- ৪. গুরুত্বপূর্ণ টীকা, নোট, ব্যাখ্যা ও সূত্রতথ্য বক্স (নিচ পর্যন্ত বিস্তৃত) -->
                 <div class="mw-ib-card mw-ib-notes-card">
                     <div class="mw-notes-head">
-                        <span class="mw-notes-title">✦ গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা</span>
-                        <span class="mw-notes-count"><?= count($bookNotes) ?></span>
+                        <span class="mw-notes-title">✦ গুরুত্বপূর্ণ টীকা, নোট, ব্যাখ্যা ও সূত্রতথ্য</span>
+                        <span class="mw-notes-count"><?= toBengaliNum(count($bookNotes)) ?></span>
                     </div>
                     <div class="mw-notes-body">
                         <?php if (!empty($bookNotes)): ?>
                             <?php foreach ($bookNotes as $ni => $bn):
-                                $cls = $bn['type'] === 'ব্যাখ্যা' ? 'is-byakhya' : ($bn['type'] === 'নোট' ? 'is-note' : 'is-tika');
+                                $cls = $bn['type'] === 'ব্যাখ্যা' ? 'is-byakhya' : ($bn['type'] === 'নোট' ? 'is-note' : ($bn['type'] === 'সূত্রতথ্য' ? 'is-sutra' : 'is-tika'));
                             ?>
-                                <div class="mw-note-item <?= $cls ?>" data-needle="<?= htmlspecialchars($bn['needle']) ?>" onclick="scrollToNote(this)" title="মূল বইয়ে দেখতে ক্লিক করুন">
+                                <div class="mw-note-item <?= $cls ?>" data-anchor="<?= htmlspecialchars($bn['anchor'] ?? '') ?>" data-needle="<?= htmlspecialchars($bn['needle']) ?>" onclick="scrollToNote(this)" title="মূল বইয়ে দেখতে ক্লিক করুন">
                                     <div class="mw-note-meta">
-                                        <span class="mw-note-badge"><?= htmlspecialchars($bn['type']) ?></span>
-                                        <span class="mw-note-heading"><?= htmlspecialchars($bn['title']) ?></span>
+                                        <span class="mw-note-badge"><?= htmlspecialchars($bn['label'] ?? $bn['type']) ?></span>
+                                        <?php if (!empty($bn['title']) && $bn['title'] !== ($bn['label'] ?? '')): ?>
+                                            <span class="mw-note-heading"><?= htmlspecialchars($bn['title']) ?></span>
+                                        <?php endif; ?>
                                     </div>
                                     <div class="mw-note-text"><?= htmlspecialchars($bn['body']) ?></div>
                                 </div>
                             <?php endforeach; ?>
                         <?php else: ?>
-                            <div class="mw-notes-empty">এই অধ্যায়ে আলাদা কোনো টীকা, নোট বা ব্যাখ্যা চিহ্নিত হয়নি।</div>
+                            <div class="mw-notes-empty">এই অধ্যায়ে আলাদা কোনো টীকা, নোট, ব্যাখ্যা বা সূত্রতথ্য চিহ্নিত হয়নি।</div>
                         <?php endif; ?>
                     </div>
-                    <div class="mw-notes-footer">✦ টীকা ও ব্যাখ্যা সমাপ্ত ✦</div>
+                    <div class="mw-notes-footer">✦ টীকা, নোট, ব্যাখ্যা ও সূত্রতথ্য সমাপ্ত ✦</div>
                 </div>
             </aside>
 
@@ -1309,6 +1477,18 @@ document.addEventListener('keydown', function (e) {
 window.addEventListener('load', selectQueryOnLoad);
 
 function scrollToNote(el) {
+    var anchorId = el.getAttribute('data-anchor') || '';
+    if (anchorId) {
+        var target = document.getElementById(anchorId);
+        if (target) {
+            var block = target.closest('p, h1, h2, h3, h4, h5, h6, li') || target;
+            block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            block.classList.remove('mw-note-flash');
+            void block.offsetWidth;
+            block.classList.add('mw-note-flash');
+            return;
+        }
+    }
     var needle = (el.getAttribute('data-needle') || '').replace(/\s+/g, ' ').trim();
     if (!needle) return;
     var body = document.getElementById('editableContent');
