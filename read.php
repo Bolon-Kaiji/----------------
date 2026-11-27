@@ -660,6 +660,15 @@ if ($fullAccess) {
             font-size: .72rem; font-weight: 700; letter-spacing: .08em;
             color: var(--accent); margin-bottom: 5px;
         }
+        .mw-col-logo {
+            margin: 6px auto 6px;
+            text-align: center;
+        }
+        .mw-col-logo img {
+            width: 52px;
+            height: auto;
+            display: inline-block;
+        }
         .mw-col-booktitle {
             font-size: .96rem; font-weight: 700; color: #0f172a; line-height: 1.3; margin: 0;
         }
@@ -1028,6 +1037,9 @@ if ($fullAccess) {
                 <div class="mw-ib-card mw-ib-colophon">
                     <div class="mw-col-head">
                         <div class="mw-col-ornament">✦ গ্রন্থপরিচিতি ও প্রকাশনা ✦</div>
+                        <?php if (!empty($col['logo'])): ?>
+                            <div class="mw-col-logo"><img src="<?= htmlspecialchars($col['logo']) ?>" alt="সমাচার লোগো"></div>
+                        <?php endif; ?>
                         <div class="mw-col-booktitle"><?= htmlspecialchars($col['book_title'] ?? $book['title']) ?></div>
                         <?php if (!empty($col['author'])): ?>
                             <span class="mw-col-author-pill">লেখক: <?= htmlspecialchars($col['author']) ?></span>
