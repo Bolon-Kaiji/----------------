@@ -574,12 +574,9 @@ if ($fullAccess) {
             padding: clamp(16px, 2.6vw, 32px) 12px clamp(18px, 3vw, 36px) clamp(16px, 3vw, 36px);
             box-shadow: 0 1px 3px rgba(0,0,0,.06);
             background-clip: padding-box;
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) clamp(260px, 25vw, 336px);
-            gap: 0 clamp(14px, 2vw, 24px);
-            align-items: stretch;
+            display: flow-root;
             max-width: 100%;
-            overflow-x: hidden;
+            overflow-x: clip;
         }
         .mw-article-main {
             min-width: 0;
@@ -594,12 +591,17 @@ if ($fullAccess) {
         }
         .mw-subtitle { color: var(--wp-muted); font-size: .9rem; margin: 0 0 1.4rem; }
 
-        /* ---------- ডান ইনফোবক্স (উইকিপিডিয়া-ধাঁচের ৩য় কলাম, ডানে দাগ পর্যন্ত ও নিচ পর্যন্ত বিস্তৃত) ---------- */
+        /* ---------- ডান ইনফোবক্স (উইকিপিডিয়া-ধাঁচের ৩য় কলাম, কনটেন্ট অনুযায়ী উচ্চতা ও ডানে ভাসমান) ---------- */
         .mw-infobox {
-            width: 100%;
+            float: right;
+            clear: right;
+            position: relative;
+            z-index: 1;
+            width: clamp(260px, 25vw, 336px);
+            max-width: 100%;
             min-width: 0;
-            height: 100%;
-            margin: 0;
+            height: auto;
+            margin: 0 0 16px clamp(14px, 2vw, 24px);
             display: flex; flex-direction: column; gap: 14px;
             font-size: .86rem; line-height: 1.5; overflow-wrap: anywhere;
         }
@@ -649,97 +651,43 @@ if ($fullAccess) {
             position: relative;
         }
         .mw-col-head {
-            padding: 13px 14px 11px;
+            padding: 13px 14px 10px;
             text-align: center;
             background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 13%, #ffffff), color-mix(in srgb, var(--accent) 5%, #fff8eb));
             border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, #e2e8f0);
         }
         .mw-col-ornament {
-            font-size: .7rem; font-weight: 700; letter-spacing: .08em;
-            color: var(--accent); margin-bottom: 4px;
+            font-size: .72rem; font-weight: 700; letter-spacing: .08em;
+            color: var(--accent); margin-bottom: 5px;
         }
         .mw-col-booktitle {
-            font-size: 1rem; font-weight: 700; color: #0f172a; line-height: 1.35; margin: 0 0 6px;
+            font-size: .96rem; font-weight: 700; color: #0f172a; line-height: 1.3; margin: 0;
         }
-        .mw-col-author-pill {
-            display: inline-block; padding: 2px 10px; border-radius: 999px;
-            background: #ffffff; border: 1px solid color-mix(in srgb, var(--accent) 30%, #cbd5e1);
-            color: var(--accent); font-size: .78rem; font-weight: 700;
-            box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+        .mw-col-body { padding: 6px 10px 10px; }
+        .mw-col-table {
+            width: 100%; border-collapse: collapse; font-size: .81rem; line-height: 1.38;
         }
-        .mw-col-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
-        .mw-col-section {
-            background: rgba(255, 255, 255, .85);
-            border: 1px solid #e6ebf1;
-            border-radius: 10px;
-            padding: 8px 10px;
+        .mw-col-table th, .mw-col-table td {
+            padding: 5px 6px; vertical-align: top;
+            border-top: 1px solid color-mix(in srgb, var(--accent) 14%, #e2e8f0);
         }
-        .mw-col-sec-title {
-            font-size: .73rem; font-weight: 700; color: var(--accent);
-            text-transform: uppercase; letter-spacing: .04em;
-            margin: 0 0 5px; padding-bottom: 3px;
-            border-bottom: 1px dashed color-mix(in srgb, var(--accent) 28%, #cbd5e1);
-            display: flex; align-items: center; gap: 5px;
+        .mw-col-table tr:first-child th, .mw-col-table tr:first-child td { border-top: 0; }
+        .mw-col-table th {
+            width: 28%; color: #0f172a; font-weight: 700; text-align: right;
+            padding-right: 9px; white-space: nowrap;
+            border-right: 1px solid color-mix(in srgb, var(--accent) 22%, #cbd5e1);
         }
-        .mw-col-pub-house { font-weight: 700; color: #0f172a; font-size: .9rem; }
-        .mw-col-line { margin: 2px 0; color: #334155; font-size: .82rem; line-height: 1.45; }
-        .mw-col-phones { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
-        .mw-col-phone {
-            display: inline-flex; align-items: center; gap: 4px;
-            padding: 2px 8px; border-radius: 999px;
-            background: color-mix(in srgb, var(--accent) 8%, #f1f5f9);
-            color: #1e293b; font-size: .77rem; font-weight: 600;
-            border: 1px solid color-mix(in srgb, var(--accent) 18%, #e2e8f0);
+        .mw-col-table td {
+            color: #1e293b; text-align: left; padding-left: 9px;
         }
-        .mw-col-timeline {
-            list-style: none; margin: 2px 0 0; padding: 0 0 0 12px;
-            border-left: 2px solid color-mix(in srgb, var(--accent) 30%, #cbd5e1);
-            display: flex; flex-direction: column; gap: 6px;
-        }
-        .mw-col-timeline li { position: relative; font-size: .81rem; line-height: 1.4; color: #334155; }
-        .mw-col-timeline li::before {
-            content: ""; position: absolute; left: -17px; top: 5px;
-            width: 8px; height: 8px; border-radius: 50%;
-            background: var(--accent); border: 2px solid #fff;
-            box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, #cbd5e1);
-        }
-        .mw-col-ed-label { font-weight: 700; color: #0f172a; }
-        .mw-col-ed-note { display: block; font-size: .76rem; color: var(--accent); font-style: italic; }
-        .mw-col-kv { width: 100%; border-collapse: collapse; font-size: .81rem; }
-        .mw-col-kv th, .mw-col-kv td { padding: 3px 0; vertical-align: top; border-top: 1px dotted #e2e8f0; }
-        .mw-col-kv tr:first-child th, .mw-col-kv tr:first-child td { border-top: 0; }
-        .mw-col-kv th { width: 42%; color: var(--wp-muted); font-weight: 700; text-align: left; padding-right: 6px; }
-        .mw-col-kv td { color: #1e293b; font-weight: 600; }
-        .mw-col-dist { display: flex; flex-direction: column; gap: 5px; }
-        .mw-col-dist-item { font-size: .8rem; line-height: 1.42; color: #334155; }
-        .mw-col-dist-item b { color: #0f172a; }
-        .mw-col-footer {
-            padding: 9px 12px;
-            background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, #f8fafc), #f1f5f9);
-            border-top: 1px solid color-mix(in srgb, var(--accent) 20%, #e2e8f0);
-            display: flex; flex-direction: column; gap: 6px;
-        }
-        .mw-col-price-row {
-            display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap;
-        }
-        .mw-col-price-badge {
-            padding: 3px 9px; border-radius: 8px;
-            background: var(--accent); color: #fff; font-weight: 700; font-size: .82rem;
-        }
-        .mw-col-usd-badge {
-            padding: 3px 9px; border-radius: 8px;
-            background: #fff; color: #0f172a; font-weight: 700; font-size: .8rem;
-            border: 1px solid #cbd5e1;
-        }
-        .mw-col-isbn {
-            text-align: center; font-size: .78rem; font-weight: 700; letter-spacing: .04em;
-            color: #334155; background: rgba(255, 255, 255, .8);
-            border: 1px dashed #cbd5e1; border-radius: 6px; padding: 3px 8px;
-        }
+        .mw-col-line { margin: 0; line-height: 1.38; }
+        .mw-col-cover-credit { color: #2563eb; font-weight: 600; }
+        .mw-col-typeset-credit { color: #15803d; font-weight: 600; }
+        .mw-col-isbn-label { color: #15803d; font-weight: 700; }
 
-        /* ---------- ৪. গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা বক্স (নিচ পর্যন্ত বিস্তৃত) ---------- */
+        /* ---------- ৪. গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা বক্স (কনটেন্ট অনুযায়ী অটো-উচ্চতা) ---------- */
         .mw-ib-notes-card {
-            flex: 1 1 auto;
+            flex: 0 0 auto;
             display: flex;
             flex-direction: column;
             background: linear-gradient(180deg, #fffdf9 0%, #f8fafc 100%);
@@ -822,12 +770,14 @@ if ($fullAccess) {
         }
 
         /* ---------- মূল লেখা ---------- */
-        .mw-body { min-height: 300px; overflow-x: auto; overflow-wrap: anywhere; text-align: justify; text-justify: inter-word; }
-        .mw-body table { max-width: 100%; text-align: initial; }
-        .mw-body td, .mw-body th { overflow-wrap: anywhere; word-break: break-word; }
+        .mw-body { min-height: 300px; font-size: 18px; line-height: 1.6; overflow: visible; overflow-wrap: anywhere; text-align: justify; text-justify: inter-word; }
+        .mw-body table { max-width: 100%; font-size: inherit; text-align: initial; line-height: 1.6; }
+        .mw-body td, .mw-body th { overflow-wrap: anywhere; word-break: break-word; line-height: 1.6; }
+        .mw-body table p { line-height: 1.6; }
         .mw-body h1, .mw-body h2, .mw-body h3, .mw-body h4 {
             font-family: 'Times New Roman', 'SolaimanLipi', 'Al-Majid Quranic', 'Noto Sans Bengali', 'Noto Naskh Arabic', serif;
             font-weight: 400; line-height: 1.3; margin: 1.6rem 0 .6rem; scroll-margin-top: 4rem; text-align: left;
+            overflow: hidden;
         }
         .mw-body h2 { font-size: 1.5rem; border-bottom: 1px solid var(--wp-border-soft); padding-bottom: .25rem; }
         .mw-body h2.mw-chapter-title {
@@ -839,11 +789,11 @@ if ($fullAccess) {
         }
         .mw-body h2.mw-chapter-title::before { content: "\2766"; display: block; font-size: 1.4rem; margin-bottom: .3rem; color: var(--accent); }
         .mw-body h3 { font-size: 1.22rem; }
-        .mw-body p { margin: 0 0 .9rem; line-height: 1.85; scroll-margin-top: 4rem; text-align: justify; }
+        .mw-body p { margin: 0 0 .5rem; line-height: 1.6; scroll-margin-top: 4rem; text-align: justify; }
+        .mw-body ul, .mw-body ol { margin: 0 0 1rem; padding-left: 1.6rem; line-height: 1.6; }
         .mw-body a { color: var(--wp-link); }
         .mw-body a:visited { color: var(--wp-link-visited); }
         .mw-body a.mw-redlink { color: var(--wp-redlink); }
-        .mw-body ul, .mw-body ol { margin: 0 0 1rem; padding-left: 1.6rem; }
         .mw-body blockquote { margin: 1rem 0; padding: .5rem 1rem; border-left: 4px solid var(--accent); background: var(--wp-bg-soft); }
         .mw-body img { max-width: 100%; height: auto; }
         .mw-body[contenteditable="true"] { outline: 2px dashed var(--accent); outline-offset: 6px; }
@@ -864,14 +814,14 @@ if ($fullAccess) {
             .mw-main { margin-left: 0; }
             .mw-menu-btn { display: inline-block; }
             .mw-article { display: block; padding: 16px; }
-            .mw-infobox { width: 100%; height: auto; margin: 1.2rem 0; }
+            .mw-infobox { float: none; width: 100%; height: auto; margin: 0 0 1.2rem 0; }
         }
         @media print {
             .mw-app { display: block; }
             .mw-sidebar, .mw-topbar, .mw-menu-btn { display: none !important; }
             .mw-main { margin-left: 0; }
             .mw-article { display: block; border: 0; box-shadow: none; padding: 0; }
-            .mw-infobox { height: auto; margin-bottom: 1.2rem; }
+            .mw-infobox { float: none; width: 100%; height: auto; margin: 0 0 1.2rem 0; }
         }
 
         /* ---------- বইয়ের ভেতরে সার্চ মডাল ---------- */
@@ -1034,30 +984,7 @@ if ($fullAccess) {
 
     <div class="mw-content-wrap">
         <article class="mw-article">
-            <div class="mw-article-main">
-                <h1 class="mw-title" id="editableTitle" contenteditable="false" spellcheck="true"><?= htmlspecialchars($currentChapter['title']) ?></h1>
-                <p class="mw-subtitle"><?= htmlspecialchars($book['category']) ?> · <?= htmlspecialchars($book['pages']) ?></p>
-
-                <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="true">
-                    <?= $isHtml ? $bodyHtml : nl2br($bodyHtml) ?>
-                </div>
-
-                <!-- তথ্যসূত্র -->
-                <div class="mw-references">
-                    <h2>তথ্যসূত্র</h2>
-                    <?php if (!empty($references)): ?>
-                        <ol>
-                            <?php foreach ($references as $ref): ?>
-                                <li><?= htmlspecialchars($ref) ?></li>
-                            <?php endforeach; ?>
-                        </ol>
-                    <?php else: ?>
-                        <p class="mw-ref-note">এই অধ্যায়ের জন্য এখনো কোনো তথ্যসূত্র যুক্ত করা হয়নি।</p>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <!-- ডান পাশের ইনফোবক্স (৩য় কলাম) -->
+            <!-- ডান পাশের ইনফোবক্স (৩য় কলাম — float: right, তাই মূল লেখার আগে থাকবে) -->
             <aside class="mw-infobox">
                 <!-- ১. প্রচ্ছদের বক্স -->
                 <div class="mw-ib-card mw-ib-cover-card">
@@ -1205,6 +1132,26 @@ if ($fullAccess) {
                     <div class="mw-notes-footer">✦ টীকা ও ব্যাখ্যা সমাপ্ত ✦</div>
                 </div>
             </aside>
+
+            <div class="mw-article-main">
+                <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="true">
+                    <?= $isHtml ? $bodyHtml : nl2br($bodyHtml) ?>
+                </div>
+
+                <!-- তথ্যসূত্র -->
+                <div class="mw-references">
+                    <h2>তথ্যসূত্র</h2>
+                    <?php if (!empty($references)): ?>
+                        <ol>
+                            <?php foreach ($references as $ref): ?>
+                                <li><?= htmlspecialchars($ref) ?></li>
+                            <?php endforeach; ?>
+                        </ol>
+                    <?php else: ?>
+                        <p class="mw-ref-note">এই অধ্যায়ের জন্য এখনো কোনো তথ্যসূত্র যুক্ত করা হয়নি।</p>
+                    <?php endif; ?>
+                </div>
+            </div>
         </article>
     </div>
 </div>
@@ -1492,14 +1439,16 @@ function scrollToToc(el) {
 window.addEventListener('load', precomputeTocTargets);
 
 function setEditMode(on, btn) {
-    document.getElementById('editableTitle').setAttribute('contenteditable', on ? 'true' : 'false');
+    var titleEl = document.getElementById('editableTitle');
+    if (titleEl) titleEl.setAttribute('contenteditable', on ? 'true' : 'false');
     document.getElementById('editableContent').setAttribute('contenteditable', on ? 'true' : 'false');
     document.querySelectorAll('.mw-tab').forEach(function (t) { t.classList.remove('active'); });
     if (btn) btn.classList.add('active');
 }
 
 function savePage() {
-    document.getElementById('hiddenTitle').value = document.getElementById('editableTitle').innerText;
+    var titleEl = document.getElementById('editableTitle');
+    document.getElementById('hiddenTitle').value = titleEl ? titleEl.innerText : <?= json_encode($currentChapter['title'], JSON_UNESCAPED_UNICODE) ?>;
     document.getElementById('hiddenContent').value = document.getElementById('editableContent').innerHTML;
     document.getElementById('saveForm').submit();
 }
@@ -1547,9 +1496,10 @@ function getMatchingVoice(isBengali, gender, index) {
 
 function startReadingBook() {
     window.speechSynthesis.cancel();
-    const titleText = document.getElementById('editableTitle').innerText;
+    var titleEl = document.getElementById('editableTitle');
+    const titleText = titleEl ? titleEl.innerText : '';
     const bodyText = document.getElementById('editableContent').innerText;
-    const fullText = titleText + "। " + bodyText;
+    const fullText = (titleText ? titleText + "। " : '') + bodyText;
     if (!fullText.trim()) { alert("পড়ার জন্য কোনো লেখা পাওয়া যায়নি।"); return; }
     const sel = document.getElementById('voiceSelector');
     const selectedKey = sel ? sel.value : 'f1';
