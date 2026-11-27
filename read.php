@@ -828,6 +828,15 @@ if ($fullAccess) {
         .bs-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; align-items: center; justify-content: center; }
         .bs-box { background: var(--wp-bg); width: min(640px, 92vw); max-height: 82vh; display: flex; flex-direction: column; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.3); overflow: hidden; }
         .bs-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--wp-border-soft); }
+
+        /* ---------- মোবাইল ভিউ প্রিভিউ মডাল ---------- */
+        .mv-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 1001; align-items: center; justify-content: center; padding: 16px; }
+        .mv-box { background: var(--wp-bg); border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,.35); display: flex; flex-direction: column; align-items: center; padding: 12px 16px 16px; max-width: 96vw; max-height: 96vh; }
+        .mv-head { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--wp-border-soft); }
+        .mv-head h3 { margin: 0; font-size: 1rem; font-weight: 600; color: var(--wp-ink); }
+        .mv-actions { display: flex; align-items: center; gap: 6px; }
+        .mv-phone { width: 375px; max-width: 100%; height: min(812px, calc(100vh - 110px)); border: 10px solid #1e293b; border-radius: 28px; overflow: hidden; background: #fff; box-shadow: 0 12px 32px rgba(0,0,0,.25); }
+        .mv-phone iframe { width: 100%; height: 100%; border: 0; display: block; }
         .bs-head h3 { margin: 0; font-size: 1.05rem; color: var(--accent); }
         .bs-close { border: 0; background: none; font-size: 24px; cursor: pointer; color: var(--wp-muted); line-height: 1; }
         .bs-searchbar { display: flex; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--wp-border-soft); }
@@ -942,7 +951,8 @@ if ($fullAccess) {
         <button type="button" class="mw-tool primary" onclick="savePage()">💾 সেভ করুন</button>
         <button type="button" class="mw-tool" onclick="window.print()">🖨️ প্রিন্ট / PDF</button>
         <a class="mw-tool" href="?id=<?= $id ?>&paper=<?= $paperIdx ?>&chap=<?= $chapIdx ?>&download=1">⬇️ ডাউনলোড<?= $fullAccess ? '' : ' (আনলক অংশ)' ?></a>
-        <button type="button" class="mw-tool" onclick="openBookSearch()">🔍 বইয়ে খুঁজুন</button>
+        <button type="button" class="mw-tool" onclick="openBookSearch()">🔍 বইয়ের ভিতরে খুঁজুন</button>
+        <button type="button" class="mw-tool" onclick="openMobilePreview()">📱 মোবাইলে দেখুন</button>
     </div>
 
     <?php if (!$fullAccess): ?>
@@ -1528,6 +1538,46 @@ function stopReadingBook() {
 }
 
 window.onbeforeunload = function () { window.speechSynthesis.cancel(); };
+
+/* ---------- মোবাইল ভিউ প্রিভিউ (375×812) ---------- */
+function openMobilePreview(targetUrl) {
+    const modal = document.getElementById('mobilePreviewModal');
+    const frame = document.getElementById('mobilePreviewFrame');
+    const url = targetUrl || window.location.href;
+    if (frame.getAttribute('data-src') !== url) {
+        frame.src = url;
+        frame.setAttribute('data-src', url);
+    }
+    modal.style.display = 'flex';
+}
+
+function closeMobilePreview() {
+    document.getElementById('mobilePreviewModal').style.display = 'none';
+}
+
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+        const mv = document.getElementById('mobilePreviewModal');
+        if (mv && mv.style.display === 'flex') closeMobilePreview();
+    }
+});
 </script>
+
+<!-- মোবাইল ভিউ প্রিভিউ মডাল -->
+<div class="mv-modal" id="mobilePreviewModal" onclick="if(event.target===this)closeMobilePreview()">
+    <div class="mv-box">
+        <div class="mv-head">
+            <h3>📱 মোবাইল ভিউ (375×812)</h3>
+            <div class="mv-actions">
+                <button type="button" class="mw-tool" onclick="openMobilePreview(window.location.href)">এই পেজ</button>
+                <button type="button" class="mw-tool" onclick="openMobilePreview('index.php')">মূল পেজ</button>
+                <button type="button" class="bs-close" onclick="closeMobilePreview()" aria-label="বন্ধ করুন">&times;</button>
+            </div>
+        </div>
+        <div class="mv-phone">
+            <iframe id="mobilePreviewFrame" title="মোবাইল ভিউ প্রিভিউ"></iframe>
+        </div>
+    </div>
+</div>
 </body>
 </html>
