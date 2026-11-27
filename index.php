@@ -659,7 +659,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     </div>
 
     <!-- বইয়ের গ্রিড -->
-    <h2 style="margin-top:10px;">বইয়ের তালিকা (মোট <?= count($books) ?>টি)</h2>
+    <h2 id="bookList" style="margin-top:10px; scroll-margin-top: 16px;">বইয়ের তালিকা (মোট <?= count($books) ?>টি)</h2>
     <div class="book-grid">
         <?php if (empty($books)): ?>
             <div class="empty-msg">এখনো কোনো বই যুক্ত করা হয়নি। উপরের ফর্ম থেকে প্রথম বই যুক্ত করুন।</div>

@@ -824,6 +824,7 @@ if ($fullAccess) {
             .mw-menu-btn { display: inline-block; }
             .mw-article { display: block; padding: 16px; }
             .mw-infobox { float: none; width: 100%; height: auto; margin: 0 0 1.2rem 0; }
+            .mw-ib-notes-card { display: none; }
         }
         @media print {
             .mw-app { display: block; }
@@ -873,7 +874,7 @@ if ($fullAccess) {
         <div class="mw-logo-text">মিথোস্কোপিডিয়া<small>মিথোলজি → থিওলজি</small></div>
     </div>
     <nav class="mw-nav">
-        <a href="index.php" class="mw-back">← সব বইয়ের তালিকায় ফিরুন</a>
+        <a href="index.php#bookList" class="mw-back">← সব বইয়ের তালিকায় ফিরুন</a>
         <div class="mw-nav-title"><span class="mw-nav-title-main">সূচিপত্র</span> (অধ্যায়সমূহ)</div>
         <ul class="mw-toc-list">
             <?php if (!empty($toc)): ?>
@@ -1447,7 +1448,13 @@ function precomputeTocTargets() {
     }
 }
 
+function closeMobileSidebar() {
+    var sb = document.getElementById('mwSidebar');
+    if (sb) sb.classList.remove('open');
+}
+
 function scrollToToc(el) {
+    closeMobileSidebar();
     var key = (el.getAttribute('data-key') || '').trim();
     if (!key) return true;
     var target = tocTargets[key];
@@ -1457,6 +1464,13 @@ function scrollToToc(el) {
     }
     return true;
 }
+
+document.addEventListener('click', function (e) {
+    var sb = document.getElementById('mwSidebar');
+    if (!sb || !sb.classList.contains('open')) return;
+    if (sb.contains(e.target) || e.target.closest('.mw-menu-btn')) return;
+    sb.classList.remove('open');
+});
 
 window.addEventListener('load', precomputeTocTargets);
 
