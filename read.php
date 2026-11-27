@@ -296,6 +296,55 @@ function tocKey($t) {
 
 $references = $book['references'] ?? [];
 
+// বইয়ের লেখা থেকে গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা সংগ্রহ
+function extractBookNotes($plain, $book = []) {
+    $notes = [];
+    if (!empty($book['notes']) && is_array($book['notes'])) {
+        foreach ($book['notes'] as $n) {
+            if (!is_array($n)) continue;
+            $t = trim((string)($n['title'] ?? 'টীকা'));
+            $b = trim((string)($n['body'] ?? ($n['text'] ?? '')));
+            $type = trim((string)($n['type'] ?? 'নোট'));
+            if ($b !== '') $notes[] = ['type' => $type, 'title' => $t, 'body' => $b, 'needle' => $t];
+        }
+    }
+    $lines = preg_split('/\r\n|\r|\n/', (string)$plain);
+    $n = count($lines);
+    for ($i = 0; $i < $n; $i++) {
+        $line = trim($lines[$i]);
+        if ($line === '') continue;
+        $type = null;
+        if (preg_match('/^টীকা(?:\s*[-\s]?[০-৯0-9]+)?\s*\(Annotation[^)]*\)$/u', $line)
+            || preg_match('/^টীকা(?:\s*[-\s]?[০-৯0-9]+)?\s*[:\-–]/u', $line)) {
+            $type = 'টীকা';
+        } elseif (preg_match('/^ব্যাখ্যা(?:\s*[-\s]?[০-৯0-9]+)?\s*\(Explanation[^)]*\)$/u', $line)
+            || preg_match('/^ব্যাখ্যা(?:\s*[-\s]?[০-৯0-9]+)?\s*[:\-–]/u', $line)) {
+            $type = 'ব্যাখ্যা';
+        } elseif (preg_match('/^নোট(?:\s*[-\s]?[০-৯0-9]+)?\s*\(Note[^)]*\)$/u', $line)
+            || preg_match('/^নোট(?:\s*[-\s]?[০-৯0-9]+)?\s*[:\-–]/u', $line)) {
+            $type = 'নোট';
+        }
+        if ($type === null) continue;
+        $body = '';
+        for ($j = $i + 1; $j < $n; $j++) {
+            $nxt = trim($lines[$j]);
+            if ($nxt !== '') { $body = $nxt; break; }
+        }
+        if ($body === '') continue;
+        if (mb_strlen($body) > 260) {
+            $body = mb_substr($body, 0, 257) . '…';
+        }
+        $notes[] = [
+            'type' => $type,
+            'title' => $line,
+            'body' => $body,
+            'needle' => mb_substr($body, 0, 45),
+        ];
+    }
+    return $notes;
+}
+$bookNotes = extractBookNotes($fullAccess ? $plainFull : $bodyHtml, $book);
+
 // সূচির নিচের পরিশিষ্ট শিরোনামসমূহ (বইয়ে থাকলে বাম পাশের সূচিতে যুক্ত হবে)
 $appendixCandidates = [
     'ব্যবহৃত সঙ্কেতাদি',
@@ -366,13 +415,16 @@ if ($fullAccess) {
             --wp-bg-soft: #f8f9fa;
             --wp-ink: #202122;
             --wp-muted: #54595d;
-            --wp-sidebar-w: 250px;
+            --wp-sidebar-w: clamp(210px, 20vw, 250px);
         }
         * { box-sizing: border-box; }
-        html { scroll-behavior: smooth; }
+        html { scroll-behavior: smooth; width: 100%; max-width: 100%; overflow-x: clip; }
         body {
             margin: 0;
-            background: var(--wp-bg);
+            width: 100%;
+            max-width: 100%;
+            overflow-x: clip;
+            background: var(--wp-bg-soft);
             color: var(--wp-ink);
             font-family: 'Times New Roman', 'SolaimanLipi', 'Al-Majid Quranic', 'Noto Sans Bengali', 'Noto Naskh Arabic', serif;
             font-size: 15px;
@@ -383,7 +435,21 @@ if ($fullAccess) {
         a:hover { text-decoration: underline; }
 
         /* ---------- বাম ফিক্সড সাইডবার (উইকিপিডিয়া Vector) ---------- */
-        .mw-app { max-width: 1400px; margin: 0 auto; display: flex; align-items: flex-start; }
+        .mw-app {
+            width: 100%;
+            max-width: 1280px;
+            margin: 0 auto;
+            display: flex;
+            align-items: flex-start;
+            background: var(--wp-bg);
+            min-height: 100vh;
+        }
+        @media (min-width: 1281px) {
+            .mw-app {
+                border-left: 1px solid var(--wp-border-soft);
+                border-right: 1px solid var(--wp-border-soft);
+            }
+        }
         .mw-sidebar {
             position: sticky; top: 0;
             width: var(--wp-sidebar-w); height: 100vh; flex: none;
@@ -404,6 +470,11 @@ if ($fullAccess) {
             font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
             color: var(--wp-muted); font-weight: 700; padding: 8px 10px 4px;
         }
+        .mw-nav .mw-nav-title .mw-nav-title-main {
+            font-size: 16px;
+            font-weight: 700;
+            color: #e91e63;
+        }
         .mw-nav a.mw-back {
             display: block; padding: 8px 10px; border-radius: 4px;
             background: var(--accent); color: #fff; font-weight: 700; text-align: center; margin-bottom: 12px;
@@ -411,11 +482,15 @@ if ($fullAccess) {
         .mw-nav a.mw-back:hover { text-decoration: none; filter: brightness(.95); }
         .mw-toc-list { list-style: none; margin: 0; padding: 0; }
         .mw-toc-list li { margin: 0; }
-        .mw-toc-row { display: flex; align-items: center; gap: 2px; }
-        .mw-toc-row .mw-toc-link { flex: 1 1 auto; min-width: 0; }
-        .mw-toc-link {
+        .mw-toc-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 2px; }
+        .mw-toc-row .mw-toc-link {
+            flex: 1 1 auto; min-width: 0;
+            display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .mw-toc-link,
+        .mw-toc-link:visited {
             display: flex; align-items: center; gap: 6px;
-            padding: 6px 8px; border-radius: 4px; color: var(--wp-ink); font-size: 14px;
+            padding: 6px 8px; border-radius: 4px; color: #bf3c2c; font-size: 14px;
         }
         .mw-toc-link:hover { background: var(--wp-border-soft); text-decoration: none; }
         .mw-toc-link.active { background: var(--wp-border-soft); font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
@@ -429,8 +504,13 @@ if ($fullAccess) {
             text-decoration: underline;
         }
         .mw-caret {
-            flex: none; width: 1.1em; height: 1.1em; border: 0; background: none; cursor: pointer;
-            color: var(--wp-muted); font-size: 11px; line-height: 1; padding: 0;
+            flex: none; width: 1.2em; height: 1.2em; border: 0; background: none; cursor: pointer;
+            color: var(--wp-muted); font-size: 15px; line-height: 1; padding: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+        }
+        .mw-toc-chapter.collapsed > .mw-toc-row .mw-caret {
+            font-size: 17px;
+            width: 18px;
         }
         .mw-caret:hover { color: var(--accent); }
         .mw-sublist { list-style: none; margin: 2px 0 4px 22px; padding: 0; border-left: 1px solid var(--wp-border-soft); }
@@ -449,7 +529,7 @@ if ($fullAccess) {
         .mw-addchap button:hover { filter: brightness(.95); }
 
         /* ---------- মূল অংশ ---------- */
-        .mw-main { margin-left: 0; flex: 1 1 auto; min-width: 0; }
+        .mw-main { margin-left: 0; flex: 1 1 auto; min-width: 0; overflow-x: clip; }
         .mw-topbar {
             position: sticky; top: 0; z-index: 15;
             background: var(--wp-bg); border-bottom: 1px solid var(--wp-border-soft);
@@ -478,8 +558,8 @@ if ($fullAccess) {
         }
         .mw-color { width: 34px; height: 30px; padding: 0; border: 1px solid var(--wp-border); border-radius: 4px; background: none; cursor: pointer; }
 
-        .mw-content-wrap { padding: clamp(14px, 3vw, 40px); max-width: 1180px; margin: 0 auto; }
-        .mw-paypanel { max-width: 1180px; margin: 16px auto 0; padding: 16px 20px; border: 1px solid var(--wp-border); border-left: 5px solid var(--accent); background: var(--wp-bg-soft); border-radius: 6px; }
+        .mw-content-wrap { padding: clamp(10px, 1.5vw, 18px) 10px clamp(16px, 2vw, 24px) clamp(12px, 2vw, 22px); width: 100%; max-width: 100%; margin: 0 auto; }
+        .mw-paypanel { width: calc(100% - clamp(24px, 4vw, 48px)); max-width: 100%; margin: 16px auto 0; padding: 16px 20px; border: 1px solid var(--wp-border); border-left: 5px solid var(--accent); background: var(--wp-bg-soft); border-radius: 6px; }
         .mw-paypanel h3 { margin: 0 0 8px; font-size: 1.1rem; color: var(--accent); }
         .mw-paypanel p { margin: .3rem 0; font-size: .9rem; }
         .mw-payform { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
@@ -491,10 +571,18 @@ if ($fullAccess) {
             background: var(--wp-bg);
             border: 1px solid var(--wp-border-soft);
             border-radius: 2px;
-            padding: clamp(18px, 3.5vw, 46px);
+            padding: clamp(16px, 2.6vw, 32px) 12px clamp(18px, 3vw, 36px) clamp(16px, 3vw, 36px);
             box-shadow: 0 1px 3px rgba(0,0,0,.06);
             background-clip: padding-box;
-            display: flow-root;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) clamp(260px, 25vw, 336px);
+            gap: 0 clamp(14px, 2vw, 24px);
+            align-items: stretch;
+            max-width: 100%;
+            overflow-x: hidden;
+        }
+        .mw-article-main {
+            min-width: 0;
         }
         /* নির্বাচিত কাগজের টেক্সচার মূল আর্টিকেল (বডি) অংশে */
         .mw-body.papered { <?= $bgStyle ?> color: <?= $textColor ?>; padding: 16px 20px; border-radius: 4px; }
@@ -506,33 +594,240 @@ if ($fullAccess) {
         }
         .mw-subtitle { color: var(--wp-muted); font-size: .9rem; margin: 0 0 1.4rem; }
 
-        /* ---------- ডান ইনফোবক্স ---------- */
+        /* ---------- ডান ইনফোবক্স (উইকিপিডিয়া-ধাঁচের ৩য় কলাম, ডানে দাগ পর্যন্ত ও নিচ পর্যন্ত বিস্তৃত) ---------- */
         .mw-infobox {
-            float: right; width: 22rem; max-width: 46%;
-            margin: .2rem 0 1.4rem 1.6rem;
-            border: 1px solid var(--wp-border); background: var(--wp-bg-soft);
+            width: 100%;
+            min-width: 0;
+            height: 100%;
+            margin: 0;
+            display: flex; flex-direction: column; gap: 14px;
             font-size: .86rem; line-height: 1.5; overflow-wrap: anywhere;
         }
-        .mw-ib-title {
-            background: var(--accent); color: #fff; font-weight: 700; text-align: center;
-            padding: 6px 8px; font-size: .95rem;
+        .mw-ib-card {
+            width: 100%;
+            border: 1px solid #d5dbe3;
+            border-radius: 14px;
+            background: var(--wp-bg-soft);
+            overflow: hidden;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, .06);
         }
-        .mw-ib-cover { padding: 8px; text-align: center; border-bottom: 1px solid var(--wp-border-soft); }
-        .mw-ib-cover img { max-width: 100%; height: auto; border: 1px solid var(--wp-border-soft); }
-        .mw-ib-author { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--wp-border-soft); }
-        .mw-ib-author img { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; flex: none; }
-        .mw-ib-author .mw-ib-label { color: var(--wp-muted); font-size: .74rem; }
-        .mw-ib-author .mw-ib-name { font-weight: 700; }
+        .mw-ib-title {
+            background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 82%, #0f172a));
+            color: #fff; font-weight: 700; text-align: center;
+            padding: 9px 12px; font-size: .96rem; letter-spacing: .01em;
+        }
+        .mw-ib-cover { padding: 10px; text-align: center; background: #fff; }
+        .mw-ib-cover img {
+            max-width: 100%; height: auto; display: block; margin: 0 auto;
+            border-radius: 8px; border: 1px solid var(--wp-border-soft);
+        }
+        .mw-ib-author-card {
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        }
+        .mw-ib-author {
+            display: flex; align-items: center; gap: 10px;
+            padding: 11px 12px;
+            background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, #ffffff), #f8fafc);
+            border-bottom: 1px solid var(--wp-border-soft);
+        }
+        .mw-ib-author img {
+            width: 46px; height: 46px; border-radius: 50%; object-fit: cover; flex: none;
+            border: 2px solid color-mix(in srgb, var(--accent) 45%, #ffffff);
+            box-shadow: 0 2px 6px rgba(15, 23, 42, .12);
+        }
+        .mw-ib-author .mw-ib-label { color: var(--wp-muted); font-size: .74rem; font-weight: 600; }
+        .mw-ib-author .mw-ib-name { font-weight: 700; font-size: .96rem; color: var(--wp-ink); }
         .mw-ib-table { width: 100%; border-collapse: collapse; }
-        .mw-ib-table th, .mw-ib-table td { border-top: 1px solid var(--wp-border-soft); padding: 5px 8px; text-align: left; vertical-align: top; }
+        .mw-ib-table th, .mw-ib-table td { border-top: 1px solid var(--wp-border-soft); padding: 6px 12px; text-align: left; vertical-align: top; }
         .mw-ib-table th { width: 38%; color: var(--wp-muted); font-weight: 700; }
         .mw-ib-table tr:first-child th, .mw-ib-table tr:first-child td { border-top: 0; }
 
+        /* ---------- গ্রন্থপরিচিতি ও প্রকাশনা কার্ড (কলোফন) ---------- */
+        .mw-ib-colophon {
+            background: linear-gradient(180deg, #fffdf9 0%, #f8fafc 100%);
+            border: 1px solid color-mix(in srgb, var(--accent) 28%, #d5dbe3);
+            position: relative;
+        }
+        .mw-col-head {
+            padding: 13px 14px 11px;
+            text-align: center;
+            background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 13%, #ffffff), color-mix(in srgb, var(--accent) 5%, #fff8eb));
+            border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, #e2e8f0);
+        }
+        .mw-col-ornament {
+            font-size: .7rem; font-weight: 700; letter-spacing: .08em;
+            color: var(--accent); margin-bottom: 4px;
+        }
+        .mw-col-booktitle {
+            font-size: 1rem; font-weight: 700; color: #0f172a; line-height: 1.35; margin: 0 0 6px;
+        }
+        .mw-col-author-pill {
+            display: inline-block; padding: 2px 10px; border-radius: 999px;
+            background: #ffffff; border: 1px solid color-mix(in srgb, var(--accent) 30%, #cbd5e1);
+            color: var(--accent); font-size: .78rem; font-weight: 700;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+        }
+        .mw-col-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+        .mw-col-section {
+            background: rgba(255, 255, 255, .85);
+            border: 1px solid #e6ebf1;
+            border-radius: 10px;
+            padding: 8px 10px;
+        }
+        .mw-col-sec-title {
+            font-size: .73rem; font-weight: 700; color: var(--accent);
+            text-transform: uppercase; letter-spacing: .04em;
+            margin: 0 0 5px; padding-bottom: 3px;
+            border-bottom: 1px dashed color-mix(in srgb, var(--accent) 28%, #cbd5e1);
+            display: flex; align-items: center; gap: 5px;
+        }
+        .mw-col-pub-house { font-weight: 700; color: #0f172a; font-size: .9rem; }
+        .mw-col-line { margin: 2px 0; color: #334155; font-size: .82rem; line-height: 1.45; }
+        .mw-col-phones { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+        .mw-col-phone {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 8px; border-radius: 999px;
+            background: color-mix(in srgb, var(--accent) 8%, #f1f5f9);
+            color: #1e293b; font-size: .77rem; font-weight: 600;
+            border: 1px solid color-mix(in srgb, var(--accent) 18%, #e2e8f0);
+        }
+        .mw-col-timeline {
+            list-style: none; margin: 2px 0 0; padding: 0 0 0 12px;
+            border-left: 2px solid color-mix(in srgb, var(--accent) 30%, #cbd5e1);
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .mw-col-timeline li { position: relative; font-size: .81rem; line-height: 1.4; color: #334155; }
+        .mw-col-timeline li::before {
+            content: ""; position: absolute; left: -17px; top: 5px;
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--accent); border: 2px solid #fff;
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, #cbd5e1);
+        }
+        .mw-col-ed-label { font-weight: 700; color: #0f172a; }
+        .mw-col-ed-note { display: block; font-size: .76rem; color: var(--accent); font-style: italic; }
+        .mw-col-kv { width: 100%; border-collapse: collapse; font-size: .81rem; }
+        .mw-col-kv th, .mw-col-kv td { padding: 3px 0; vertical-align: top; border-top: 1px dotted #e2e8f0; }
+        .mw-col-kv tr:first-child th, .mw-col-kv tr:first-child td { border-top: 0; }
+        .mw-col-kv th { width: 42%; color: var(--wp-muted); font-weight: 700; text-align: left; padding-right: 6px; }
+        .mw-col-kv td { color: #1e293b; font-weight: 600; }
+        .mw-col-dist { display: flex; flex-direction: column; gap: 5px; }
+        .mw-col-dist-item { font-size: .8rem; line-height: 1.42; color: #334155; }
+        .mw-col-dist-item b { color: #0f172a; }
+        .mw-col-footer {
+            padding: 9px 12px;
+            background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, #f8fafc), #f1f5f9);
+            border-top: 1px solid color-mix(in srgb, var(--accent) 20%, #e2e8f0);
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .mw-col-price-row {
+            display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap;
+        }
+        .mw-col-price-badge {
+            padding: 3px 9px; border-radius: 8px;
+            background: var(--accent); color: #fff; font-weight: 700; font-size: .82rem;
+        }
+        .mw-col-usd-badge {
+            padding: 3px 9px; border-radius: 8px;
+            background: #fff; color: #0f172a; font-weight: 700; font-size: .8rem;
+            border: 1px solid #cbd5e1;
+        }
+        .mw-col-isbn {
+            text-align: center; font-size: .78rem; font-weight: 700; letter-spacing: .04em;
+            color: #334155; background: rgba(255, 255, 255, .8);
+            border: 1px dashed #cbd5e1; border-radius: 6px; padding: 3px 8px;
+        }
+
+        /* ---------- ৪. গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা বক্স (নিচ পর্যন্ত বিস্তৃত) ---------- */
+        .mw-ib-notes-card {
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(180deg, #fffdf9 0%, #f8fafc 100%);
+            border: 1px solid color-mix(in srgb, var(--accent) 26%, #d5dbe3);
+        }
+        .mw-notes-head {
+            padding: 11px 13px;
+            background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 13%, #ffffff), color-mix(in srgb, var(--accent) 5%, #fff8eb));
+            border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, #e2e8f0);
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        }
+        .mw-notes-title {
+            font-size: .88rem; font-weight: 700; color: var(--accent); letter-spacing: .01em;
+        }
+        .mw-notes-count {
+            font-size: .74rem; font-weight: 700; padding: 1px 8px; border-radius: 999px;
+            background: #fff; color: var(--accent);
+            border: 1px solid color-mix(in srgb, var(--accent) 30%, #cbd5e1);
+        }
+        .mw-notes-body {
+            padding: 10px 11px;
+            display: flex; flex-direction: column; gap: 9px;
+        }
+        .mw-note-item {
+            background: rgba(255, 255, 255, .92);
+            border: 1px solid #e6ebf1;
+            border-left: 3px solid var(--accent);
+            border-radius: 9px;
+            padding: 8px 10px;
+            cursor: pointer;
+            transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+        }
+        .mw-note-item:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 10px rgba(15, 23, 42, .07);
+            border-color: color-mix(in srgb, var(--accent) 45%, #cbd5e1);
+        }
+        .mw-note-item.is-byakhya { border-left-color: #b45309; }
+        .mw-note-item.is-note { border-left-color: #0f766e; }
+        .mw-note-meta {
+            display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap;
+        }
+        .mw-note-badge {
+            font-size: .69rem; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+            background: color-mix(in srgb, var(--accent) 12%, #ffffff);
+            color: var(--accent);
+            border: 1px solid color-mix(in srgb, var(--accent) 25%, #cbd5e1);
+        }
+        .mw-note-item.is-byakhya .mw-note-badge {
+            background: #fef3c7; color: #92400e; border-color: #fcd34d;
+        }
+        .mw-note-item.is-note .mw-note-badge {
+            background: #ccfbf1; color: #115e59; border-color: #5eead4;
+        }
+        .mw-note-heading {
+            font-size: .8rem; font-weight: 700; color: #0f172a; line-height: 1.3;
+        }
+        .mw-note-text {
+            font-size: .79rem; color: #334155; line-height: 1.5; text-align: justify;
+        }
+        .mw-notes-empty {
+            padding: 14px 10px; text-align: center; color: var(--wp-muted);
+            font-size: .81rem; line-height: 1.5;
+        }
+        .mw-notes-footer {
+            margin-top: auto;
+            padding: 8px 12px;
+            text-align: center;
+            font-size: .74rem;
+            color: var(--wp-muted);
+            border-top: 1px dashed color-mix(in srgb, var(--accent) 22%, #cbd5e1);
+            background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 6%, #f8fafc), #f1f5f9);
+        }
+        .mw-note-flash {
+            animation: mwNoteFlash 2s ease;
+        }
+        @keyframes mwNoteFlash {
+            0%, 25% { background-color: #fef08a; }
+            100% { background-color: transparent; }
+        }
+
         /* ---------- মূল লেখা ---------- */
-        .mw-body { min-height: 300px; }
+        .mw-body { min-height: 300px; overflow-x: auto; overflow-wrap: anywhere; text-align: justify; text-justify: inter-word; }
+        .mw-body table { max-width: 100%; text-align: initial; }
+        .mw-body td, .mw-body th { overflow-wrap: anywhere; word-break: break-word; }
         .mw-body h1, .mw-body h2, .mw-body h3, .mw-body h4 {
             font-family: 'Times New Roman', 'SolaimanLipi', 'Al-Majid Quranic', 'Noto Sans Bengali', 'Noto Naskh Arabic', serif;
-            font-weight: 400; line-height: 1.3; margin: 1.6rem 0 .6rem; scroll-margin-top: 4rem;
+            font-weight: 400; line-height: 1.3; margin: 1.6rem 0 .6rem; scroll-margin-top: 4rem; text-align: left;
         }
         .mw-body h2 { font-size: 1.5rem; border-bottom: 1px solid var(--wp-border-soft); padding-bottom: .25rem; }
         .mw-body h2.mw-chapter-title {
@@ -544,7 +839,7 @@ if ($fullAccess) {
         }
         .mw-body h2.mw-chapter-title::before { content: "\2766"; display: block; font-size: 1.4rem; margin-bottom: .3rem; color: var(--accent); }
         .mw-body h3 { font-size: 1.22rem; }
-        .mw-body p { margin: 0 0 .9rem; line-height: 1.85; scroll-margin-top: 4rem; }
+        .mw-body p { margin: 0 0 .9rem; line-height: 1.85; scroll-margin-top: 4rem; text-align: justify; }
         .mw-body a { color: var(--wp-link); }
         .mw-body a:visited { color: var(--wp-link-visited); }
         .mw-body a.mw-redlink { color: var(--wp-redlink); }
@@ -568,13 +863,15 @@ if ($fullAccess) {
             .mw-sidebar.open { transform: translateX(0); }
             .mw-main { margin-left: 0; }
             .mw-menu-btn { display: inline-block; }
-            .mw-infobox { float: none; width: 100%; max-width: none; margin: 0 0 1.2rem; }
+            .mw-article { display: block; padding: 16px; }
+            .mw-infobox { width: 100%; height: auto; margin: 1.2rem 0; }
         }
         @media print {
             .mw-app { display: block; }
             .mw-sidebar, .mw-topbar, .mw-menu-btn { display: none !important; }
             .mw-main { margin-left: 0; }
-            .mw-article { border: 0; box-shadow: none; padding: 0; }
+            .mw-article { display: block; border: 0; box-shadow: none; padding: 0; }
+            .mw-infobox { height: auto; margin-bottom: 1.2rem; }
         }
 
         /* ---------- বইয়ের ভেতরে সার্চ মডাল ---------- */
@@ -609,7 +906,7 @@ if ($fullAccess) {
     </div>
     <nav class="mw-nav">
         <a href="index.php" class="mw-back">← সব বইয়ের তালিকায় ফিরুন</a>
-        <div class="mw-nav-title">সূচিপত্র (অধ্যায়সমূহ)</div>
+        <div class="mw-nav-title"><span class="mw-nav-title-main">সূচিপত্র</span> (অধ্যায়সমূহ)</div>
         <ul class="mw-toc-list">
             <?php if (!empty($toc)): ?>
                 <?php foreach ($toc as $ci => $ch): ?>
@@ -737,49 +1034,177 @@ if ($fullAccess) {
 
     <div class="mw-content-wrap">
         <article class="mw-article">
-            <h1 class="mw-title" id="editableTitle" contenteditable="false" spellcheck="true"><?= htmlspecialchars($currentChapter['title']) ?></h1>
-            <p class="mw-subtitle"><?= htmlspecialchars($book['category']) ?> · <?= htmlspecialchars($book['pages']) ?></p>
+            <div class="mw-article-main">
+                <h1 class="mw-title" id="editableTitle" contenteditable="false" spellcheck="true"><?= htmlspecialchars($currentChapter['title']) ?></h1>
+                <p class="mw-subtitle"><?= htmlspecialchars($book['category']) ?> · <?= htmlspecialchars($book['pages']) ?></p>
 
-            <!-- ডান পাশের ইনফোবক্স -->
-            <div class="mw-infobox">
-                <div class="mw-ib-title"><?= htmlspecialchars($book['title']) ?></div>
-                <?php if (!empty($book['cover'])): ?>
-                    <div class="mw-ib-cover"><img src="<?= htmlspecialchars($book['cover']) ?>" alt="প্রচ্ছদ"></div>
-                <?php endif; ?>
-                <div class="mw-ib-author">
-                    <?php if (!empty($book['author_img'])): ?>
-                        <img src="<?= htmlspecialchars($book['author_img']) ?>" alt="লেখক">
+                <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="true">
+                    <?= $isHtml ? $bodyHtml : nl2br($bodyHtml) ?>
+                </div>
+
+                <!-- তথ্যসূত্র -->
+                <div class="mw-references">
+                    <h2>তথ্যসূত্র</h2>
+                    <?php if (!empty($references)): ?>
+                        <ol>
+                            <?php foreach ($references as $ref): ?>
+                                <li><?= htmlspecialchars($ref) ?></li>
+                            <?php endforeach; ?>
+                        </ol>
+                    <?php else: ?>
+                        <p class="mw-ref-note">এই অধ্যায়ের জন্য এখনো কোনো তথ্যসূত্র যুক্ত করা হয়নি।</p>
                     <?php endif; ?>
-                    <div>
-                        <div class="mw-ib-label">লেখক</div>
-                        <div class="mw-ib-name"><?= htmlspecialchars($book['author']) ?></div>
+                </div>
+            </div>
+
+            <!-- ডান পাশের ইনফোবক্স (৩য় কলাম) -->
+            <aside class="mw-infobox">
+                <!-- ১. প্রচ্ছদের বক্স -->
+                <div class="mw-ib-card mw-ib-cover-card">
+                    <div class="mw-ib-title"><?= htmlspecialchars($book['title']) ?></div>
+                    <?php if (!empty($book['cover'])): ?>
+                        <div class="mw-ib-cover"><img src="<?= htmlspecialchars($book['cover']) ?>" alt="প্রচ্ছদ"></div>
+                    <?php endif; ?>
+                </div>
+
+                <!-- ২. লেখকের বক্স (প্রচ্ছদের বক্স থেকে আলাদা ও গোল কোনা) -->
+                <div class="mw-ib-card mw-ib-author-card">
+                    <div class="mw-ib-author">
+                        <?php if (!empty($book['author_img'])): ?>
+                            <img src="<?= htmlspecialchars($book['author_img']) ?>" alt="লেখক">
+                        <?php endif; ?>
+                        <div>
+                            <div class="mw-ib-label">লেখক</div>
+                            <div class="mw-ib-name"><?= htmlspecialchars($book['author']) ?></div>
+                        </div>
+                    </div>
+                    <table class="mw-ib-table">
+                        <tr><th>ক্যাটাগরি</th><td><?= htmlspecialchars($book['category']) ?></td></tr>
+                        <tr><th>পৃষ্ঠা</th><td><?= htmlspecialchars($book['pages']) ?></td></tr>
+                        <tr><th>মূল্য</th><td><?= htmlspecialchars($book['price']) ?></td></tr>
+                        <tr><th>অ্যাক্সেস</th><td><?= htmlspecialchars($book['access']) ?></td></tr>
+                    </table>
+                </div>
+
+                <!-- ৩. গ্রন্থপরিচিতি ও প্রকাশনা বক্স -->
+                <?php if (!empty($book['colophon']) && is_array($book['colophon'])): $col = $book['colophon']; ?>
+                <div class="mw-ib-card mw-ib-colophon">
+                    <div class="mw-col-head">
+                        <div class="mw-col-ornament">✦ গ্রন্থপরিচিতি ও প্রকাশনা ✦</div>
+                        <div class="mw-col-booktitle"><?= htmlspecialchars($col['book_title'] ?? $book['title']) ?></div>
+                        <?php if (!empty($col['author'])): ?>
+                            <span class="mw-col-author-pill">লেখক: <?= htmlspecialchars($col['author']) ?></span>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="mw-col-body">
+                        <div class="mw-col-section">
+                            <div class="mw-col-sec-title">🏛️ প্রকাশনা</div>
+                            <?php if (!empty($col['publisher'])): ?>
+                                <div class="mw-col-line"><b>প্রকাশক:</b> <?= htmlspecialchars($col['publisher']) ?></div>
+                            <?php endif; ?>
+                            <?php if (!empty($col['publishing_house'])): ?>
+                                <div class="mw-col-pub-house"><?= htmlspecialchars($col['publishing_house']) ?></div>
+                            <?php endif; ?>
+                            <?php if (!empty($col['address'])): ?>
+                                <div class="mw-col-line"><?= htmlspecialchars($col['address']) ?></div>
+                            <?php endif; ?>
+                            <?php if (!empty($col['phones']) && is_array($col['phones'])): ?>
+                                <div class="mw-col-phones">
+                                    <?php foreach ($col['phones'] as $ph): ?>
+                                        <span class="mw-col-phone">📞 <?= htmlspecialchars($ph) ?></span>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+
+                        <?php if (!empty($col['editions']) && is_array($col['editions'])): ?>
+                        <div class="mw-col-section">
+                            <div class="mw-col-sec-title">🕰️ প্রকাশকাল ও সংস্করণ</div>
+                            <ul class="mw-col-timeline">
+                                <?php foreach ($col['editions'] as $ed): ?>
+                                    <li>
+                                        <span class="mw-col-ed-label"><?= htmlspecialchars($ed['label'] ?? '') ?></span>,
+                                        <?= htmlspecialchars($ed['date'] ?? '') ?>
+                                        <?php if (!empty($ed['note'])): ?>
+                                            <span class="mw-col-ed-note"><?= htmlspecialchars($ed['note']) ?></span>
+                                        <?php endif; ?>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </div>
+                        <?php endif; ?>
+
+                        <?php if (!empty($col['credits']) && is_array($col['credits'])): ?>
+                        <div class="mw-col-section">
+                            <div class="mw-col-sec-title">✒️ সৃজন ও মুদ্রণ</div>
+                            <table class="mw-col-kv">
+                                <?php foreach ($col['credits'] as $cr): ?>
+                                    <tr>
+                                        <th><?= htmlspecialchars($cr['label'] ?? '') ?></th>
+                                        <td><?= htmlspecialchars($cr['value'] ?? '') ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </table>
+                        </div>
+                        <?php endif; ?>
+
+                        <?php if (!empty($col['distributors']) && is_array($col['distributors'])): ?>
+                        <div class="mw-col-section">
+                            <div class="mw-col-sec-title">🌐 পরিবেশক</div>
+                            <div class="mw-col-dist">
+                                <?php foreach ($col['distributors'] as $dist): ?>
+                                    <div class="mw-col-dist-item">
+                                        <b><?= htmlspecialchars($dist['label'] ?? '') ?>:</b> <?= htmlspecialchars($dist['value'] ?? '') ?>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="mw-col-footer">
+                        <div class="mw-col-price-row">
+                            <?php if (!empty($col['price_bdt'])): ?>
+                                <span class="mw-col-price-badge">মূল্য: <?= htmlspecialchars($col['price_bdt']) ?></span>
+                            <?php endif; ?>
+                            <?php if (!empty($col['price_usd'])): ?>
+                                <span class="mw-col-usd-badge"><?= htmlspecialchars($col['price_usd']) ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <?php if (!empty($col['isbn'])): ?>
+                            <div class="mw-col-isbn">ISBN : <?= htmlspecialchars($col['isbn']) ?></div>
+                        <?php endif; ?>
                     </div>
                 </div>
-                <table class="mw-ib-table">
-                    <tr><th>ক্যাটাগরি</th><td><?= htmlspecialchars($book['category']) ?></td></tr>
-                    <tr><th>পৃষ্ঠা</th><td><?= htmlspecialchars($book['pages']) ?></td></tr>
-                    <tr><th>মূল্য</th><td><?= htmlspecialchars($book['price']) ?></td></tr>
-                    <tr><th>অ্যাক্সেস</th><td><?= htmlspecialchars($book['access']) ?></td></tr>
-                </table>
-            </div>
-
-            <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="true">
-                <?= $isHtml ? $bodyHtml : nl2br($bodyHtml) ?>
-            </div>
-
-            <!-- তথ্যসূত্র -->
-            <div class="mw-references">
-                <h2>তথ্যসূত্র</h2>
-                <?php if (!empty($references)): ?>
-                    <ol>
-                        <?php foreach ($references as $ref): ?>
-                            <li><?= htmlspecialchars($ref) ?></li>
-                        <?php endforeach; ?>
-                    </ol>
-                <?php else: ?>
-                    <p class="mw-ref-note">এই অধ্যায়ের জন্য এখনো কোনো তথ্যসূত্র যুক্ত করা হয়নি।</p>
                 <?php endif; ?>
-            </div>
+
+                <!-- ৪. গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা বক্স (নিচ পর্যন্ত বিস্তৃত) -->
+                <div class="mw-ib-card mw-ib-notes-card">
+                    <div class="mw-notes-head">
+                        <span class="mw-notes-title">✦ গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা</span>
+                        <span class="mw-notes-count"><?= count($bookNotes) ?></span>
+                    </div>
+                    <div class="mw-notes-body">
+                        <?php if (!empty($bookNotes)): ?>
+                            <?php foreach ($bookNotes as $ni => $bn):
+                                $cls = $bn['type'] === 'ব্যাখ্যা' ? 'is-byakhya' : ($bn['type'] === 'নোট' ? 'is-note' : 'is-tika');
+                            ?>
+                                <div class="mw-note-item <?= $cls ?>" data-needle="<?= htmlspecialchars($bn['needle']) ?>" onclick="scrollToNote(this)" title="মূল বইয়ে দেখতে ক্লিক করুন">
+                                    <div class="mw-note-meta">
+                                        <span class="mw-note-badge"><?= htmlspecialchars($bn['type']) ?></span>
+                                        <span class="mw-note-heading"><?= htmlspecialchars($bn['title']) ?></span>
+                                    </div>
+                                    <div class="mw-note-text"><?= htmlspecialchars($bn['body']) ?></div>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="mw-notes-empty">এই অধ্যায়ে আলাদা কোনো টীকা, নোট বা ব্যাখ্যা চিহ্নিত হয়নি।</div>
+                        <?php endif; ?>
+                    </div>
+                    <div class="mw-notes-footer">✦ টীকা ও ব্যাখ্যা সমাপ্ত ✦</div>
+                </div>
+            </aside>
         </article>
     </div>
 </div>
@@ -912,6 +1337,25 @@ document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') closeBookSearch();
 });
 window.addEventListener('load', selectQueryOnLoad);
+
+function scrollToNote(el) {
+    var needle = (el.getAttribute('data-needle') || '').replace(/\s+/g, ' ').trim();
+    if (!needle) return;
+    var body = document.getElementById('editableContent');
+    if (!body) return;
+    var shortNeedle = needle.slice(0, 32);
+    var els = body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li');
+    for (var i = 0; i < els.length; i++) {
+        var txt = (els[i].textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt.indexOf(shortNeedle) !== -1) {
+            els[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
+            els[i].classList.remove('mw-note-flash');
+            void els[i].offsetWidth;
+            els[i].classList.add('mw-note-flash');
+            break;
+        }
+    }
+}
 
 function toggleSub(btn) {
     var li = btn.closest('li');
