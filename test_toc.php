@@ -1,5 +1,5 @@
 <?php
-require_once 'E:\\মিথোস্কোপিডিয়া\\আত্মতত্ত্ব ভেদ ১\\store.php';
+require_once __DIR__ . '/store.php';
 
 $books = loadBooks();
 $id = 'book_6b0656ef422e3';

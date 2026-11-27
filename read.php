@@ -118,7 +118,7 @@ if ($paperIdx !== 'default' && isset($book['papers'][$paperIdx])) {
     $currentPaperName = $selectedPaper['name'];
 }
 
-$currentChapter = $chapters[$chapIdx] ?? $chapters[0];
+$currentChapter = $chapters[$chapIdx] ?? ($chapters[0] ?? ['title' => $book['title'] ?? 'প্রথম অধ্যায়', 'content' => '', 'plain' => '']);
 
 // সূচিপত্র (বইয়ের প্রথম অধ্যায়ের ভেতর থেকে)
 $plain0 = $chapters[0]['plain'] ?? strip_tags($chapters[0]['content'] ?? '');
@@ -296,6 +296,39 @@ function tocKey($t) {
 
 $references = $book['references'] ?? [];
 
+// সূচির নিচের পরিশিষ্ট শিরোনামসমূহ (বইয়ে থাকলে বাম পাশের সূচিতে যুক্ত হবে)
+$appendixCandidates = [
+    'ব্যবহৃত সঙ্কেতাদি',
+    'পৌরাণিক ৪০ মূলক সংখ্যার সারণী',
+    'শ্বরবিজ্ঞান বিষয়ক শব্দসংক্ষেপ',
+    'ব্যাকরণ বিষয়ক শব্দসংক্ষেপ',
+    'ভাষা বিষয়ক শব্দসংক্ষেপ',
+    'বিষয় বিষয়ক শব্দসংক্ষেপ',
+    'আরবি, ফার্সি, উর্দু ও হিন্দি ভাষার লিপ্যন্তর নিয়মাবলী',
+    'লিপ্যন্তর- ১',
+    'লিপ্যন্তর- ২',
+    'প্রামাণ্য গ্রন্থপঞ্জি',
+    'অন্যান্য গ্রন্থাদি',
+    'কাঁই পরিবারের প্রামাণ্য গ্রন্থপঞ্জি (সন্নিবদ্ধ চলমান)',
+    'কাঁই পরিবারের প্রকাশিত গ্রন্থসমূহ',
+    'বলন বিষয়ক গ্রন্থ',
+    'লালন বিষয়ক গ্রন্থ',
+    'বৈদিক সঙ্কেত',
+];
+$appendixToc = [];
+if ($plain0 !== '') {
+    $normBn = function ($s) {
+        if (class_exists('Normalizer')) $s = Normalizer::normalize($s, Normalizer::FORM_C);
+        return str_replace(["\xE0\xA6\xAF\xE0\xA6\xBC", "\xE0\xA6\xA1\xE0\xA6\xBC", "\xE0\xA6\xA2\xE0\xA6\xBC"], ["\xE0\xA7\x9F", "\xE0\xA7\x9C", "\xE0\xA7\x9D"], $s);
+    };
+    $plain0Norm = $normBn($plain0);
+    foreach ($appendixCandidates as $cand) {
+        if (mb_strpos($plain0Norm, $normBn(tocKey($cand))) !== false) {
+            $appendixToc[] = $cand;
+        }
+    }
+}
+
 // বইয়ের ভেতরে সার্চের জন্য অধ্যায়ের লেখা (অ্যাক্সেস অনুযায়ী সীমিত)
 $searchChapters = [];
 if ($fullAccess) {
@@ -386,6 +419,15 @@ if ($fullAccess) {
         }
         .mw-toc-link:hover { background: var(--wp-border-soft); text-decoration: none; }
         .mw-toc-link.active { background: var(--wp-border-soft); font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
+        .mw-toc-link.mw-toc-appendix,
+        .mw-toc-link.mw-toc-appendix:visited {
+            color: var(--wp-link);
+            padding-left: 22px;
+        }
+        .mw-toc-link.mw-toc-appendix:hover {
+            color: var(--wp-link);
+            text-decoration: underline;
+        }
         .mw-caret {
             flex: none; width: 1.1em; height: 1.1em; border: 0; background: none; cursor: pointer;
             color: var(--wp-muted); font-size: 11px; line-height: 1; padding: 0;
@@ -452,9 +494,10 @@ if ($fullAccess) {
             padding: clamp(18px, 3.5vw, 46px);
             box-shadow: 0 1px 3px rgba(0,0,0,.06);
             background-clip: padding-box;
+            display: flow-root;
         }
         /* নির্বাচিত কাগজের টেক্সচার মূল আর্টিকেল (বডি) অংশে */
-        .mw-body.papered { <?= $bgStyle ?> color: <?= $textColor ?>; }
+        .mw-body.papered { <?= $bgStyle ?> color: <?= $textColor ?>; padding: 16px 20px; border-radius: 4px; }
 
         .mw-title {
             font-family: 'Times New Roman', 'SolaimanLipi', 'Al-Majid Quranic', 'Noto Sans Bengali', 'Noto Naskh Arabic', serif;
@@ -501,7 +544,7 @@ if ($fullAccess) {
         }
         .mw-body h2.mw-chapter-title::before { content: "\2766"; display: block; font-size: 1.4rem; margin-bottom: .3rem; color: var(--accent); }
         .mw-body h3 { font-size: 1.22rem; }
-        .mw-body p { margin: 0 0 .9rem; line-height: 1.85; }
+        .mw-body p { margin: 0 0 .9rem; line-height: 1.85; scroll-margin-top: 4rem; }
         .mw-body a { color: var(--wp-link); }
         .mw-body a:visited { color: var(--wp-link-visited); }
         .mw-body a.mw-redlink { color: var(--wp-redlink); }
@@ -589,6 +632,13 @@ if ($fullAccess) {
                     <li><a href="?id=<?= $id ?>&paper=<?= $paperIdx ?>&chap=<?= $index ?>" class="mw-toc-link"><?= htmlspecialchars($chap['title']) ?></a></li>
                 <?php endforeach; ?>
             <?php endif; ?>
+            <?php if (!empty($appendixToc)): ?>
+                <?php foreach ($appendixToc as $appTitle): ?>
+                    <li class="mw-toc-appendix-item">
+                        <a href="#mwBody" class="mw-toc-link mw-toc-appendix" data-appendix="1" data-key="<?= htmlspecialchars(tocKey($appTitle)) ?>" onclick="return scrollToToc(this)"><?= htmlspecialchars($appTitle) ?></a>
+                    </li>
+                <?php endforeach; ?>
+            <?php endif; ?>
         </ul>
 
         <form method="POST" class="mw-addchap">
@@ -603,16 +653,18 @@ if ($fullAccess) {
     <div class="mw-topbar">
         <button type="button" class="mw-tool plain mw-menu-btn" onclick="document.getElementById('mwSidebar').classList.toggle('open')">☰</button>
         <div class="mw-tabs">
-            <button type="button" class="mw-tab active" onclick="setEditMode(true, this)">✏️ সম্পাদনা</button>
-            <button type="button" class="mw-tab" onclick="setEditMode(false, this)">👁 দেখুন</button>
+            <button type="button" class="mw-tab" onclick="setEditMode(true, this)">✏️ সম্পাদনা</button>
+            <button type="button" class="mw-tab active" onclick="setEditMode(false, this)">👁 দেখুন</button>
         </div>
 
         <select class="mw-select" onchange="window.location.href='?id=<?= $id ?>&chap=<?= $chapIdx ?>&paper=' + this.value">
             <option value="">কাগজ পরিবর্তন করুন...</option>
-            <?php foreach ($book['papers'] as $pIdx => $p): ?>
+            <?php foreach (($book['papers'] ?? []) as $pIdx => $p): ?>
                 <option value="<?= $pIdx ?>" <?= $paperIdx == $pIdx ? 'selected' : '' ?>><?= htmlspecialchars($p['name']) ?></option>
             <?php endforeach; ?>
         </select>
+
+        <a href="index.php#uploadPanel" class="mw-tool primary" style="margin-right: 8px;">⬆ আপলোডে যান</a>
 
         <div style="display:flex; gap:6px; align-items:center;">
             <select id="voiceSelector" class="mw-select" aria-label="কণ্ঠ নির্বাচন">
@@ -685,7 +737,7 @@ if ($fullAccess) {
 
     <div class="mw-content-wrap">
         <article class="mw-article">
-            <h1 class="mw-title" id="editableTitle" contenteditable="true" spellcheck="true"><?= htmlspecialchars($currentChapter['title']) ?></h1>
+            <h1 class="mw-title" id="editableTitle" contenteditable="false" spellcheck="true"><?= htmlspecialchars($currentChapter['title']) ?></h1>
             <p class="mw-subtitle"><?= htmlspecialchars($book['category']) ?> · <?= htmlspecialchars($book['pages']) ?></p>
 
             <!-- ডান পাশের ইনফোবক্স -->
@@ -711,7 +763,7 @@ if ($fullAccess) {
                 </table>
             </div>
 
-            <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="true" spellcheck="true">
+            <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="true">
                 <?= $isHtml ? $bodyHtml : nl2br($bodyHtml) ?>
             </div>
 
@@ -943,6 +995,7 @@ function precomputeTocTargets() {
     // ধাপ ২: উপশিরোনাম — নিজ নিজ অধ্যায়ের সীমার ভেতরে ক্রমানুসারে
     var ci = -1, subCur = 0;
     links.forEach(function (a) {
+        if (a.hasAttribute('data-appendix')) return;
         if (a.hasAttribute('data-firstsub')) { ci++; subCur = (chapPos[ci] >= 0 ? chapPos[ci] - 1 : 0); return; }
         if (ci < 0) return;
         var start = chapPos[ci];
@@ -956,10 +1009,29 @@ function precomputeTocTargets() {
     // যে উপশিরোনাম মেলেনি, তার লিংককে সংশ্লিষ্ট অধ্যায়ের সূচনায় পাঠানো হয়
     ci = -1;
     links.forEach(function (a) {
+        if (a.hasAttribute('data-appendix')) return;
         if (a.hasAttribute('data-firstsub')) { ci++; return; }
         var key = a.getAttribute('data-key') || '';
         if (!tocTargets[key] && ci >= 0 && chapPos[ci] >= 0) tocTargets[key] = idx[chapPos[ci]].el;
     });
+
+    // ধাপ ৩: সূচির নিচের পরিশিষ্ট শিরোনামসমূহ — শেষ অধ্যায়ের পর থেকে ক্রমানুসারে
+    var appLinks = links.filter(function (a) { return a.hasAttribute('data-appendix'); });
+    if (appLinks.length) {
+        var lastChapPos = -1;
+        for (var k = chapPos.length - 1; k >= 0; k--) {
+            if (chapPos[k] >= 0) { lastChapPos = chapPos[k]; break; }
+        }
+        var appCur = lastChapPos >= 0 ? lastChapPos : cs - 1;
+        appLinks.forEach(function (a) {
+            var key = a.getAttribute('data-key') || '';
+            var p = findInIndex(idx, key, appCur + 1, idx.length);
+            if (p >= 0) {
+                tocTargets[key] = idx[p].el;
+                appCur = p;
+            }
+        });
+    }
 }
 
 function scrollToToc(el) {

@@ -180,6 +180,7 @@
   min-height: 20rem;
   box-shadow: 0 6px 22px var(--ms-shadow);
   overflow-wrap: anywhere;
+  display: flow-root;
 }
 .bv-article > *:first-child { margin-top: 0; }
 

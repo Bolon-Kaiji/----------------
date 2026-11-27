@@ -1,15 +1,14 @@
 <?php
+require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/store.php';
 require_once __DIR__ . '/pay.php';
 // স্বয়ংক্রিয়ভাবে ফোল্ডার এবং JSON ডাটাবেস তৈরি
 $dirs = ['uploads', 'uploads/covers', 'uploads/authors', 'uploads/papers', 'uploads/books'];
 foreach ($dirs as $dir) {
-    if (!is_dir($dir)) mkdir($dir, 0777, true);
+    $absDir = __DIR__ . '/' . $dir;
+    if (!is_dir($absDir)) mkdir($absDir, 0777, true);
 }
-$dbFile = 'books.json';
-if (!file_exists($dbFile)) file_put_contents($dbFile, json_encode([]));
-
-$books = json_decode(file_get_contents($dbFile), true);
-if (!is_array($books)) $books = [];
+$books = loadBooks();
 $message = '';
 
 // .doc / .docx ফাইল থেকে লেখা পড়ার হেল্পার ফাংশন
@@ -214,6 +213,10 @@ function docxToHtml($path, $mediaDir, $srcPrefix, $skipSet = []) {
     return $out;
 }
 
+if (defined('LIB_ONLY')) {
+    return;
+}
+
 // নতুন বই আপলোড প্রসেসিং
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'upload_book') {
     $id = uniqid('book_');
@@ -228,11 +231,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     // ফাইল আপলোড হেল্পার ফাংশন
     function uploadFile($fileInput, $folder, $prefix) {
-        if (isset($_FILES[$fileInput]) && $_FILES[$fileInput]['error'] === 0) {
-            $ext = pathinfo($_FILES[$fileInput]['name'], PATHINFO_EXTENSION);
-            $path = $folder . '/' . $prefix . '_' . uniqid() . '.' . $ext;
-            move_uploaded_file($_FILES[$fileInput]['tmp_name'], $path);
-            return $path;
+        if (isset($_FILES[$fileInput]) && $_FILES[$fileInput]['error'] === 0 && is_uploaded_file($_FILES[$fileInput]['tmp_name'])) {
+            $ext = strtolower(pathinfo($_FILES[$fileInput]['name'], PATHINFO_EXTENSION));
+            $path = $folder . '/' . $prefix . '_' . uniqid() . ($ext !== '' ? '.' . $ext : '');
+            $dest = __DIR__ . '/' . $path;
+            if (!is_dir(dirname($dest))) @mkdir(dirname($dest), 0777, true);
+            if (move_uploaded_file($_FILES[$fileInput]['tmp_name'], $dest)) {
+                return $path;
+            }
         }
         return '';
     }
@@ -241,12 +247,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $authorPath = uploadFile('author_img', 'uploads/authors', 'author');
     $fullBookPath = uploadFile('full_book_file', 'uploads/books', 'fullbook');
 
-    // যদি পুরো বইয়ের .doc/.docx ফাইল আপলোড করা হয়, তবে স্বয়ংক্রিয়ভাবে লেখা পড়ে নেবে
+    // যদি পুরো বইয়ের .doc/.docx/.txt/.md ফাইল আপলোড করা হয়, তবে স্বয়ংক্রিয়ভাবে লেখা পড়ে নেবে
     $plainContent = '';
     if ($fullBookPath) {
+        $fullAbsPath = __DIR__ . '/' . $fullBookPath;
         $fullExt = strtolower(pathinfo($fullBookPath, PATHINFO_EXTENSION));
         if ($fullExt === 'docx') {
-            $plainContent = docToText($fullBookPath, 'docx');
+            $plainContent = docToText($fullAbsPath, 'docx');
             // সূচিপত্র ব্লক বাদ দেওয়ার সেট
             $skipSet = [];
             $pl = preg_split('/\r\n|\r|\n/', $plainContent);
@@ -257,17 +264,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 if ($s - 1 >= 0 && trim($pl[$s - 1]) !== '' && strpos($pl[$s - 1], '#') === false && mb_strlen(trim($pl[$s - 1])) <= 40) $s--;
                 for ($i = $s; $i <= $last; $i++) { $tt = trim($pl[$i]); if ($tt !== '') $skipSet[$tt] = true; }
             }
-            $html = docxToHtml($fullBookPath, 'uploads/books', 'uploads/books', $skipSet);
+            $html = docxToHtml($fullAbsPath, __DIR__ . "/uploads/books/$id", "uploads/books/$id", $skipSet);
             if (trim(strip_tags($html)) !== '') {
                 $content = $html;
             }
         } elseif ($fullExt === 'doc') {
-            $fileText = docToText($fullBookPath, $fullExt);
+            $fileText = docToText($fullAbsPath, $fullExt);
             if (!empty(trim($fileText))) {
                 $content = $fileText;
                 $plainContent = $fileText;
             }
+        } elseif (in_array($fullExt, ['txt', 'md', 'markdown'], true)) {
+            $fileText = (string)@file_get_contents($fullAbsPath);
+            if (trim($fileText) !== '') {
+                $content = htmlspecialchars($fileText, ENT_QUOTES, 'UTF-8');
+                $plainContent = $fileText;
+            }
         }
+    }
+    if ($plainContent === '' && trim($content) !== '') {
+        $plainContent = strip_tags($content);
     }
 
     // ৫টি পড়ার কাগজের টেক্সচার আপলোড
@@ -284,7 +300,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (trim($content) === '') {
         $message = "বই আপলোড হয়নি — বিষয়বস্তু খালি। অনুগ্রহ করে লেখা লিখুন অথবা সম্পূর্ণ বইয়ের ফাইল (.doc/.docx) আপলোড করুন।";
     } else {
-        $books[$id] = [
+        addBook($id, [
             'id' => $id,
             'title' => $title,
             'author' => $author,
@@ -296,12 +312,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             'author_img' => $authorPath,
             'full_book_file' => $fullBookPath,
             'papers' => $papers,
-            'chapters' => [
-                ['title' => $chapter_title, 'content' => $content, 'plain' => $plainContent]
-            ]
-        ];
-
-        file_put_contents($dbFile, json_encode($books, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        ], [
+            ['title' => $chapter_title, 'content' => $content, 'plain' => $plainContent]
+        ]);
+        $books = loadBooks();
         $message = "সফলভাবে '$title' সম্পূর্ণ বইটি ও কাগজের টেক্সচারগুলো আপলোড হয়েছে!";
     }
 }
@@ -312,7 +326,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (isset($books[$id])) {
         $books[$id]['price'] = htmlspecialchars($_POST['new_price']);
         $books[$id]['access'] = htmlspecialchars($_POST['new_access']);
-        file_put_contents($dbFile, json_encode($books, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        saveBooks($books);
         $message = "বইয়ের মূল্য ও অ্যাক্সেস আপডেট করা হয়েছে!";
     }
 }
@@ -336,8 +350,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mythoscopia - ১০০ বইয়ের মহাপরিকল্পনা</title>
+    <link rel="stylesheet" href="https://fonts.maateen.me/solaiman-lipi/font.css">
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f1ea; margin: 0; padding: 0; color: #222; }
+        @font-face {
+            font-family: 'SolaimanLipi';
+            src: local('SolaimanLipi'),
+                 url('https://cdn.jsdelivr.net/gh/potatosalad/solaimanlipi@master/SolaimanLipi.woff') format('woff'),
+                 url('https://fonts.maateen.me/solaiman-lipi/font/SolaimanLipi.woff') format('woff');
+            font-display: swap;
+        }
+        body { font-family: 'Times New Roman', 'SolaimanLipi', Times, serif; background: #f4f1ea; margin: 0; padding: 0; color: #222; }
+        button, input, select, textarea { font-family: inherit; }
         header { background: #1e293b; color: #fff; padding: 15px 0; }
         .header-inner { max-width: 1200px; margin: 0 auto; padding: 0 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
         header h1 { margin: 0; font-size: 24px; color: #f59e0b; }
@@ -386,6 +409,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         .audio-btn-stop { background: #dc2626; }
         .audio-btn-listen:hover { background: #16a34a; }
         .audio-btn-stop:hover { background: #b91c1c; }
+
+        /* Word (.docx) মেটাডেটা কালেক্টর */
+        #metadataCollectorPanel { background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        #metadataCollectorPanel h2 { margin: 0 0 6px; font-size: 22px; color: #1f2937; }
+        .mc-subtitle { color: #4b5563; margin: 0 0 18px; font-size: 14px; }
+        .mc-upload-box { background: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #e5e7eb; margin-bottom: 20px; }
+        .mc-upload-label { display: block; margin-bottom: 8px; font-weight: bold; color: #374151; font-size: 14px; }
+        .mc-file-input { display: block; width: 100%; font-size: 14px; color: #6b7280; margin-bottom: 14px; }
+        .mc-file-input::file-selector-button { margin-right: 14px; padding: 8px 16px; border-radius: 9999px; border: 0; font-size: 13px; font-weight: 600; background: #eff6ff; color: #1d4ed8; cursor: pointer; }
+        .mc-file-input::file-selector-button:hover { background: #dbeafe; }
+        .mc-pattern-box { margin-bottom: 14px; padding: 12px; background: #fefce8; border: 1px solid #fef08a; border-radius: 8px; font-size: 13px; color: #854d0e; line-height: 1.6; }
+        .mc-pattern-box code { background: rgba(0,0,0,0.05); padding: 1px 5px; border-radius: 4px; font-family: Consolas, monospace; }
+        .mc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .mc-btn-reset { padding: 8px 16px; background: #e5e7eb; color: #374151; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; }
+        .mc-btn-reset:hover { background: #d1d5db; }
+        .mc-btn-export { padding: 8px 16px; background: #16a34a; color: #ffffff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; }
+        .mc-btn-export:hover:not(:disabled) { background: #15803d; }
+        .mc-btn-export:disabled { opacity: 0.5; cursor: not-allowed; }
+        .mc-table-wrap { background: #fff; border-radius: 10px; border: 1px solid #e5e7eb; overflow-x: auto; }
+        .mc-table { width: 100%; text-align: left; border-collapse: collapse; font-size: 14px; }
+        .mc-table thead { background: #f3f4f6; }
+        .mc-table th { padding: 12px; border-bottom: 1px solid #e5e7eb; font-weight: bold; color: #1f2937; white-space: nowrap; }
+        .mc-table td { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb; vertical-align: middle; }
+        .mc-table td:last-child { border-right: none; }
+        .mc-table tbody tr:hover { background: #f9fafb; }
+        .mc-filename-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mc-cell-input { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+        .mc-cell-input:focus { outline: 2px solid #3b82f6; background: #ffffff; border-color: transparent; }
+        .mc-remove-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 13px; font-weight: bold; padding: 4px 6px; }
+        .mc-remove-btn:hover { color: #b91c1c; }
     </style>
 </head>
 <body>
@@ -396,7 +449,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <h1>MYTHOSCOPIA</h1>
             <small>মিথোলজি ও থিওলজি আর্কাইভ (১০০ বইয়ের প্রজেক্ট)</small>
         </div>
-        <button class="btn btn-primary" onclick="toggleUpload()">▲/▼ আপলোড ফর্ম দেখুন বা লুকান</button>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <a href="index.html" class="btn btn-primary" style="text-decoration: none; background: #2563eb;">📖 বুক ভিউয়ার</a>
+            <button class="btn btn-primary" onclick="toggleUpload()">▲/▼ আপলোড ফর্ম দেখুন বা লুকান</button>
+        </div>
 
         <!-- নিরক্ষর পাঠকদের জন্য ভয়েস রিডিং বাটন -->
         <div style="display: flex; gap: 8px; align-items: center;">
@@ -514,6 +570,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
             <button type="submit" class="btn btn-primary" style="margin-top:20px;">✓ বই ও কাগজ আপলোড করুন</button>
         </form>
+    </div>
+
+    <!-- Word (.docx) মেটাডেটা কালেক্টর -->
+    <div id="metadataCollectorPanel">
+        <h2>Word (.docx) মেটাডেটা কালেক্টর</h2>
+        <p class="mc-subtitle">একসাথে ফাইল সিলেক্ট করুন → ফাইলের নাম থেকে অটো-শিরোনাম/লেখক/বছর পাবেন → ম্যানুয়াল এডিট → CSV ডাউনলোড করুন</p>
+
+        <div class="mc-upload-box">
+            <label class="mc-upload-label" for="fileInput">১. Word ফাইল সিলেক্ট করুন (.docx)</label>
+            <input type="file" id="fileInput" multiple accept=".docx" class="mc-file-input">
+
+            <div class="mc-pattern-box">
+                <strong>ফাইলের নামের প্যাটার্ন:</strong> <code>শিরোনাম_লেখক_বছর.docx</code><br>
+                উদাহরণ: <code>আত্মতত্ত্ব_রবীন্দ্রনাথ_২০২৩.docx</code> ⇒ শিরোনাম=আত্মতত্ত্ব, লেখক=রবীন্দ্রনাথ, বছর=২০২৩
+            </div>
+
+            <div class="mc-actions">
+                <button type="button" onclick="resetAll()" class="mc-btn-reset">রিসেট</button>
+                <button type="button" onclick="exportCSV()" class="mc-btn-export" id="exportBtn" disabled>CSV ডাউনলোড</button>
+            </div>
+        </div>
+
+        <div class="mc-table-wrap">
+            <table class="mc-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>ফাইলের নাম</th>
+                        <th>শিরোনাম (শিরোনাম)</th>
+                        <th>লেখক</th>
+                        <th>বছর</th>
+                        <th>ক্যাটাগরি</th>
+                        <th>নোট (ম্যানুয়াল)</th>
+                        <th>অ্যাকশন</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
     </div>
 
     <!-- পেমেন্ট যাচাই (অ্যাডমিন) -->
@@ -646,8 +741,13 @@ function openBook(id) {
     (book.papers || []).forEach((p, idx) => {
         const el = document.createElement('div');
         el.className = 'paper-choice';
-        el.innerHTML = '<img src="' + p.image + '" alt=""><span></span>';
-        el.querySelector('span').textContent = p.name;
+        const img = document.createElement('img');
+        img.src = p.image || '';
+        img.alt = '';
+        const span = document.createElement('span');
+        span.textContent = p.name || '';
+        el.appendChild(img);
+        el.appendChild(span);
         el.onclick = () => goRead(id, idx);
         opts.appendChild(el);
     });
@@ -797,6 +897,97 @@ function stopReadingBook() {
 window.onbeforeunload = function() {
     window.speechSynthesis.cancel();
 };
+</script>
+
+<!-- Word (.docx) মেটাডেটা কালেক্টর স্ক্রিপ্ট -->
+<script>
+let docs = [];
+
+// ফাইলের নাম থেকে মেটা এক্সট্রাক্ট (শিরোনাম_লেখক_বছর.docx)
+function extractMeta(filename) {
+    const name = filename.replace(/\.docx$/i, '');
+    const parts = name.split('_');
+    return {
+        title: parts[0] || '',
+        author: parts[1] || '',
+        year: parts[2] || '',
+        category: '',
+        notes: ''
+    };
+}
+
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    docs = files.map((f, i) => {
+        const meta = extractMeta(f.name);
+        return { id: Date.now() + i, file: f, name: f.name, ...meta };
+    });
+
+    renderTable();
+    document.getElementById('exportBtn').disabled = false;
+});
+
+function renderTable() {
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = '';
+
+    docs.forEach((doc, idx) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td style="color:#4b5563;">${idx + 1}</td>
+            <td class="mc-filename-cell" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</td>
+            <td><input type="text" class="mc-cell-input" value="${escapeHtml(doc.title)}" onchange="updateDoc(${doc.id}, 'title', this.value)"></td>
+            <td><input type="text" class="mc-cell-input" value="${escapeHtml(doc.author)}" onchange="updateDoc(${doc.id}, 'author', this.value)"></td>
+            <td><input type="text" class="mc-cell-input" value="${escapeHtml(doc.year)}" onchange="updateDoc(${doc.id}, 'year', this.value)"></td>
+            <td><input type="text" class="mc-cell-input" value="${escapeHtml(doc.category)}" onchange="updateDoc(${doc.id}, 'category', this.value)"></td>
+            <td><textarea class="mc-cell-input" rows="1" onchange="updateDoc(${doc.id}, 'notes', this.value)">${escapeHtml(doc.notes)}</textarea></td>
+            <td><button type="button" onclick="removeDoc(${doc.id})" class="mc-remove-btn">মুছো</button></td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function updateDoc(id, field, value) {
+    const doc = docs.find(d => d.id === id);
+    if (doc) doc[field] = value;
+}
+
+function removeDoc(id) {
+    docs = docs.filter(d => d.id !== id);
+    renderTable();
+    if (docs.length === 0) document.getElementById('exportBtn').disabled = true;
+}
+
+function resetAll() {
+    docs = [];
+    document.getElementById('fileInput').value = '';
+    renderTable();
+    document.getElementById('exportBtn').disabled = true;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function exportCSV() {
+    const headers = ['ফাইলের নাম','শিরোনাম','লেখক','বছর','ক্যাটাগরি','নোট'];
+    const rows = docs.map(d => [d.name, d.title, d.author, d.year, d.category, d.notes]);
+    const csvContent = [
+        headers.join(','),
+        ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `word_metadata_${new Date().toISOString().slice(0,10)}.csv`;
+    link.click();
+}
 </script>
 </body>
 </html>
