@@ -100,9 +100,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $isAdminUser) {
     if (isset($_POST['save_edit'])) {
         $oldPlain = $chapters[$chapIdx]['plain'] ?? '';
         $editedContent = (string)($_POST['edited_content'] ?? '');
-        // রেন্ডারের সময় স্বয়ংক্রিয়ভাবে যুক্ত হওয়া অধ্যায়-ব্যানার ও মার্কার সরিয়ে মূল কনটেন্ট সংরক্ষণ
+        // রেন্ডারের সময় স্বয়ংক্রিয়ভাবে যুক্ত হওয়া অধ্যায়-ব্যানার, টেবিল র‍্যাপার, ছবির ফ্রেম ও মার্কার সরিয়ে মূল কনটেন্ট সংরক্ষণ
         $editedContent = preg_replace('/<h2\b[^>]*class="[^"]*\bmw-chapter-title\b[^"]*"[^>]*>.*?<\/h2>/su', '', $editedContent);
         $editedContent = preg_replace('/<a\b[^>]*id="toc-body-start"[^>]*><\/a>/u', '', $editedContent);
+        $editedContent = preg_replace('/<div\b[^>]*class="[^"]*\bmw-table-wrap\b[^"]*"[^>]*>(<table\b.*?<\/table>)<\/div>/su', '$1', $editedContent);
+        $editedContent = preg_replace_callback('/<figure\b[^>]*class="[^"]*\bmw-wiki-thumb\b[^"]*"[^>]*>(.*?)<\/figure>/su', function ($m) {
+            $inner = $m[1];
+            $media = '';
+            $cap = '';
+            if (preg_match('/<div\b[^>]*class="[^"]*\bmw-wiki-thumb-media\b[^"]*"[^>]*>(.*?)<\/div>/su', $inner, $mm)) {
+                $media = '<p style="margin:0 0 .6em;text-align:center;">' . $mm[1] . '</p>';
+            }
+            if (preg_match('/<figcaption\b[^>]*class="[^"]*\bmw-wiki-thumbcaption\b[^"]*"[^>]*>(.*?)<\/figcaption>/su', $inner, $cm)) {
+                $cap = '<p style="margin:0 0 .6em;text-align:center;">' . $cm[1] . '</p>';
+            }
+            return ($media !== '' || $cap !== '') ? ($media . $cap) : $m[0];
+        }, $editedContent);
 
         $chapters[$chapIdx]['title'] = $_POST['edited_title'];
         $chapters[$chapIdx]['content'] = $editedContent;
@@ -154,10 +167,30 @@ $plainFull = $currentChapter['plain'] ?? strip_tags($currentChapter['content'] ?
 if ($fullAccess) {
     $bodyHtml = $currentChapter['content'];
     $isHtml = (strpos($bodyHtml, '<p') !== false || strpos($bodyHtml, '<table') !== false || strpos($bodyHtml, '<img') !== false);
+    if ($isHtml) {
+        // পুরো বইয়ের সব অধ্যায়ে ইনলাইন ফন্ট-ফ্যামিলি সরানো (কনফিগার করা ফন্ট স্ট্যাক স্থায়ী রাখতে)
+        $tmp = preg_replace('/font-family\s*:\s*[^;"]+;?/iu', '', $bodyHtml);
+        if ($tmp !== null) $bodyHtml = $tmp;
+        $tmp = preg_replace('/\s+style="\s*"/u', '', $bodyHtml);
+        if ($tmp !== null) $bodyHtml = $tmp;
+    }
     if ($chapIdx === 0 && !empty($toc)) {
         if ($isHtml) {
-            // ফন্ট-ফ্যামিলি ইনলাইন স্টাইল সরানো (CSS ফন্ট স্ট্যাক কাজ করবে)
-            $bodyHtml = preg_replace('/font-family:\s*[^;"]*;/u', '', $bodyHtml);
+            // অপ্রয়োজনীয় 14pt/খালি <span> ট্যাগ সরিয়ে DOM হালকা করা (সম্পাদনা ও পাবলিক ভিউ উভয় পেজে Out of Memory প্রতিরোধ)
+            $tmp = preg_replace('/font-size:\s*14pt;?/u', '', $bodyHtml);
+            if ($tmp !== null) $bodyHtml = $tmp;
+            $tmp = preg_replace('/\s+style="\s*"/u', '', $bodyHtml);
+            if ($tmp !== null) $bodyHtml = $tmp;
+            for ($si = 0; $si < 3; $si++) {
+                $tmp = preg_replace('/<span>([^<]*)<\/span>/u', '$1', $bodyHtml);
+                if ($tmp === null || $tmp === $bodyHtml) break;
+                $bodyHtml = $tmp;
+            }
+            for ($si = 0; $si < 3; $si++) {
+                $tmp = preg_replace('/<span (style="[^"]+")>([^<]*)<\/span><span \1>([^<]*)<\/span>/u', '<span $1>$2$3</span>', $bodyHtml);
+                if ($tmp === null || $tmp === $bodyHtml) break;
+                $bodyHtml = $tmp;
+            }
             // অধ্যায়ের শিরোনামগুলোকে নান্দনিক হেডিংয়ে রূপান্তর
             $bodyHtml = decorateChapterHeadings($bodyHtml, $toc);
         } else {
@@ -171,6 +204,10 @@ if ($fullAccess) {
     $bodyHtml = mb_substr($plainFull, 0, $showLen);
 }
 $bodyHtml = numberBookNotesInContent($bodyHtml, $isHtml);
+if ($isHtml) {
+    $bodyHtml = decorateBookTables($bodyHtml);
+    $bodyHtml = decorateBookImages($bodyHtml);
+}
 
 // ক্যাটাগরি অনুযায়ী অটো-থিম (উইকিপিডিয়া টেমপ্লেটের সূক্ষ্ম রঙ)
 $catAccents = [
@@ -412,6 +449,38 @@ function classifyBookNoteHeading($line) {
     return null;
 }
 
+// লাইনের ভেতর থাকা বন্ধনীযুক্ত (তথ্যসূত্র ...) / (সূত্রতথ্য ...) উদ্ধৃতি বের করা
+function extractInlineSutraCitations($text) {
+    $results = [];
+    $text = (string)$text;
+    if (!preg_match_all('/\(\s*(?:তথ্যসূত্র|সূত্রতথ্য)(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?\s*[ঃ:\-–]?\s*/u', $text, $matches, PREG_OFFSET_CAPTURE)) {
+        return $results;
+    }
+    $len = strlen($text);
+    foreach ($matches[0] as $m) {
+        $startByte = $m[1];
+        $prefixLen = strlen($m[0]);
+        $depth = 1;
+        $pos = $startByte + $prefixLen;
+        while ($pos < $len && $depth > 0) {
+            $ch = $text[$pos];
+            if ($ch === '(') $depth++;
+            elseif ($ch === ')') $depth--;
+            $pos++;
+        }
+        $endByte = $pos;
+        $inner = substr($text, $startByte + $prefixLen, $endByte - ($startByte + $prefixLen));
+        if ($depth === 0 && substr($inner, -1) === ')') {
+            $inner = substr($inner, 0, -1);
+        }
+        $inner = trim(preg_replace('/\s+/u', ' ', $inner));
+        if ($inner !== '') {
+            $results[] = $inner;
+        }
+    }
+    return $results;
+}
+
 // মূল লেখায় টীকা, নোট, ব্যাখ্যা ও সূত্রতথ্য শিরোনামে ক্রমিক নম্বর বসানো
 function numberBookNotesInContent($content, $isHtml) {
     $counters = ['টীকা' => 0, 'নোট' => 0, 'ব্যাখ্যা' => 0, 'সূত্রতথ্য' => 0];
@@ -422,7 +491,43 @@ function numberBookNotesInContent($content, $isHtml) {
             $plain = trim(html_entity_decode(strip_tags($pHtml), ENT_QUOTES, 'UTF-8'));
             $plain = preg_replace('/\s+/u', ' ', $plain);
             $info = classifyBookNoteHeading($plain);
-            if ($info === null) return $pHtml;
+            if ($info === null) {
+                if (preg_match('/\(\s*(?:তথ্যসূত্র|সূত্রতথ্য)/u', $plain)) {
+                    $cites = extractInlineSutraCitations($plain);
+                    if (!empty($cites)) {
+                        $tokens = preg_split('/(<[^>]+>)/u', $pHtml, -1, PREG_SPLIT_DELIM_CAPTURE);
+                        $citeIdx = 0;
+                        $seenOpenParen = false;
+                        foreach ($tokens as $ti => $tok) {
+                            if ($tok === '' || $tok[0] === '<') continue;
+                            if ($citeIdx >= count($cites)) break;
+                            $tokens[$ti] = preg_replace_callback('/(\(\s*)?(?:তথ্যসূত্র|সূত্রতথ্য)(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?(\s*[ঃ:\-–])?/u', function ($mm) use (&$counters, &$noteIdx, &$citeIdx, $cites, &$seenOpenParen) {
+                                $hasParen = !empty($mm[1]);
+                                if (!$hasParen && !$seenOpenParen) {
+                                    return $mm[0];
+                                }
+                                if ($citeIdx >= count($cites)) return $mm[0];
+                                $counters['সূত্রতথ্য']++;
+                                $numBn = toBengaliNum($counters['সূত্রতথ্য']);
+                                $anchorId = 'mw-note-' . $noteIdx;
+                                $noteIdx++;
+                                $citeIdx++;
+                                $seenOpenParen = false;
+                                $label = 'সূত্রতথ্য (' . $numBn . ')';
+                                $sep = !empty($mm[2]) ? $mm[2] : ':';
+                                return ($mm[1] ?? '') . '<span id="' . $anchorId . '" class="mw-inline-note-label" style="font-weight:700;color:#0000CC;">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</span>' . $sep;
+                            }, $tok);
+                            if (preg_match('/\(\s*$/u', strip_tags($tok))) {
+                                $seenOpenParen = true;
+                            } elseif (trim($tok) !== '') {
+                                $seenOpenParen = false;
+                            }
+                        }
+                        return implode('', $tokens);
+                    }
+                }
+                return $pHtml;
+            }
 
             $type = $info['type'];
             $counters[$type]++;
@@ -457,13 +562,194 @@ function numberBookNotesInContent($content, $isHtml) {
     foreach ($lines as $i => $line) {
         $t = trim($line);
         $info = classifyBookNoteHeading($t);
-        if ($info === null) continue;
-        $type = $info['type'];
-        $counters[$type]++;
-        $numBn = toBengaliNum($counters[$type]);
-        $lines[$i] = $type . ' (' . $numBn . ')';
+        if ($info !== null) {
+            $type = $info['type'];
+            $counters[$type]++;
+            $numBn = toBengaliNum($counters[$type]);
+            $lines[$i] = $type . ' (' . $numBn . ')';
+            $noteIdx++;
+            continue;
+        }
+        if (preg_match('/\(\s*(?:তথ্যসূত্র|সূত্রতথ্য)/u', $t)) {
+            $lines[$i] = preg_replace_callback('/(\(\s*)(?:তথ্যসূত্র|সূত্রতথ্য)(?:\s*[-\s]?(?:\([০-৯0-9]+\)|[০-৯0-9]+))?(\s*[ঃ:\-–])?/u', function ($mm) use (&$counters, &$noteIdx) {
+                $counters['সূত্রতথ্য']++;
+                $numBn = toBengaliNum($counters['সূত্রতথ্য']);
+                $noteIdx++;
+                $sep = !empty($mm[2]) ? $mm[2] : ':';
+                return $mm[1] . 'সূত্রতথ্য (' . $numBn . ')' . $sep;
+            }, $line);
+        }
     }
     return implode("\n", $lines);
+}
+
+// মূল লেখার টেবিলগুলোকে স্ক্রলযোগ্য আধুনিক কার্ড র‍্যাপারে মোড়ানো (ব্যাকট্র্যাক-মুক্ত O(N) লুপ)
+function decorateBookTables($html) {
+    $html = (string)$html;
+    if (stripos($html, '<table') === false) return $html;
+    if (strpos($html, 'mw-table-wrap') !== false) return $html;
+
+    $out = '';
+    $pos = 0;
+    $len = strlen($html);
+    while ($pos < $len) {
+        $tStart = stripos($html, '<table', $pos);
+        if ($tStart === false) {
+            $out .= substr($html, $pos);
+            break;
+        }
+        $out .= substr($html, $pos, $tStart - $pos);
+        $depth = 0;
+        $scan = $tStart;
+        $tEnd = false;
+        while ($scan < $len) {
+            $nextOpen = stripos($html, '<table', $scan);
+            $nextClose = stripos($html, '</table>', $scan);
+            if ($nextClose === false) break;
+            if ($nextOpen !== false && $nextOpen < $nextClose) {
+                $depth++;
+                $scan = $nextOpen + 6;
+            } else {
+                $depth--;
+                $scan = $nextClose + 8;
+                if ($depth <= 0) {
+                    $tEnd = $scan;
+                    break;
+                }
+            }
+        }
+        if ($tEnd === false) {
+            $out .= substr($html, $tStart);
+            break;
+        }
+        $out .= '<div class="mw-table-wrap">' . substr($html, $tStart, $tEnd - $tStart) . '</div>';
+        $pos = $tEnd;
+    }
+    return $out;
+}
+
+// ছবিগুলোকে নান্দনিক বর্ডার ও ক্যাপশনসহ উইকিপিডিয়া ধাঁচে ডানে ভাসমান করা (ব্যাকট্র্যাক-মুক্ত)
+function decorateBookImages($html) {
+    $html = (string)$html;
+    if (stripos($html, '<img') === false) return $html;
+
+    $out = '';
+    $pos = 0;
+    $len = strlen($html);
+    while ($pos < $len) {
+        $imgPos = stripos($html, '<img', $pos);
+        if ($imgPos === false) {
+            $out .= substr($html, $pos);
+            break;
+        }
+        // এই <img>-এর ঠিক আগের <p খুঁজে বের করা
+        $prefix = substr($html, $pos, $imgPos - $pos);
+        $relPStart = strripos($prefix, '<p');
+        if ($relPStart === false) {
+            $out .= substr($html, $pos, ($imgPos + 4) - $pos);
+            $pos = $imgPos + 4;
+            continue;
+        }
+        $pStart = $pos + $relPStart;
+        // নিশ্চিত করা যে <p ও <img>-এর মাঝে কোনো </p> বা <figure নেই
+        $between = substr($html, $pStart, $imgPos - $pStart);
+        if (stripos($between, '</p>') !== false || strpos($between, 'mw-wiki-thumb') !== false) {
+            $out .= substr($html, $pos, ($imgPos + 4) - $pos);
+            $pos = $imgPos + 4;
+            continue;
+        }
+        $pEndTag = stripos($html, '</p>', $imgPos);
+        if ($pEndTag === false) {
+            $out .= substr($html, $pos);
+            break;
+        }
+        $pEnd = $pEndTag + 4;
+        $pImg = substr($html, $pStart, $pEnd - $pStart);
+
+        // এই অনুচ্ছেদের আগে যা আছে তা আউটপুটে যোগ
+        $out .= substr($html, $pos, $pStart - $pos);
+
+        // লোগো (যেমন সমাচার লোগো বা খুব ছোট আইকন) আলাদাভাবে রাখুন
+        if (preg_match('/samachar_logo\.png|width:\s*(?:[1-9]\d?|100)px/iu', $pImg) || !preg_match_all('/<img\b[^>]*>/iu', $pImg, $imgMatches)) {
+            $out .= $pImg;
+            $pos = $pEnd;
+            continue;
+        }
+
+        $imgTags = $imgMatches[0];
+        $isSignature = false;
+        foreach ($imgTags as $tag) {
+            if (preg_match('/\bsrc="([^"]+)"/i', $tag, $sm)) {
+                $srcPath = __DIR__ . '/' . ltrim($sm[1], '/');
+                if (is_file($srcPath)) {
+                    $info = @getimagesize($srcPath);
+                    if ($info && ($info[1] <= 95 || $info[0] <= 110)) {
+                        $isSignature = true;
+                    }
+                }
+            }
+        }
+        if (!$isSignature && preg_match('/text-align:\s*right/i', $pImg) && count($imgTags) === 1) {
+            $isSignature = true;
+        }
+
+        // পরের <p> ক্যাপশন বা স্বাক্ষর কি না তা যাচাই করা
+        $pNext = '';
+        $nextEnd = $pEnd;
+        $wsPos = $pEnd;
+        while ($wsPos < $len && strpos(" \t\r\n", $html[$wsPos]) !== false) $wsPos++;
+        if ($wsPos < $len && strncasecmp(substr($html, $wsPos, 2), '<p', 2) === 0 && ($wsPos + 2 >= $len || strpos(" >\t\r\n", $html[$wsPos + 2]) !== false)) {
+            $nEndTag = stripos($html, '</p>', $wsPos);
+            if ($nEndTag !== false) {
+                $pNext = substr($html, $wsPos, ($nEndTag + 4) - $wsPos);
+                $nextEnd = $nEndTag + 4;
+            }
+        }
+
+        if (!$isSignature && $pNext !== '') {
+            $nextTxtCheck = trim(html_entity_decode(strip_tags($pNext), ENT_QUOTES, 'UTF-8'));
+            if (preg_match('/^\(?\s*প্রফেসর\s+ড\.\s*আনিসুজ্জামান/u', $nextTxtCheck)) {
+                $isSignature = true;
+            }
+        }
+
+        if ($isSignature) {
+            $out .= $pImg;
+            $pos = $pEnd;
+            continue;
+        }
+
+        $captionHtml = '';
+        $consumedNext = false;
+        if ($pNext !== '' && stripos($pNext, '<img') === false) {
+            $nextPlain = trim(preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags($pNext), ENT_QUOTES, 'UTF-8')));
+            $isCentered = (bool)preg_match('/text-align:\s*center/i', $pNext);
+            $looksLikeCaption = ($nextPlain !== '' && mb_strlen($nextPlain) <= 130 && (
+                $isCentered ||
+                preg_match('/^(?:চিত্র|Figure|Fig\.?|মানচিত্র|X\s*এর\s*চিত্র)/iu', $nextPlain)
+            ));
+            if ($looksLikeCaption) {
+                $innerCap = preg_replace('/^<p\b[^>]*>|<\/p>$/iu', '', trim($pNext));
+                $captionHtml = '<figcaption class="mw-wiki-thumbcaption">' . $innerCap . '</figcaption>';
+                $consumedNext = true;
+            }
+        }
+
+        $cleanImgs = array_map(function ($tag) {
+            $tag = preg_replace('/margin:\s*[^;"]+;?/i', '', $tag);
+            $tag = preg_replace('/display:\s*block;?/i', '', $tag);
+            return $tag;
+        }, $imgTags);
+
+        $multiClass = count($cleanImgs) > 1 ? ' mw-wiki-thumb-multi' : '';
+        $out .= '<figure class="mw-wiki-thumb' . $multiClass . '">'
+            . '<div class="mw-wiki-thumb-media">' . implode('', $cleanImgs) . '</div>'
+            . $captionHtml
+            . '</figure>';
+
+        $pos = $consumedNext ? $nextEnd : $pEnd;
+    }
+    return $out;
 }
 
 // বইয়ের লেখা থেকে গুরুত্বপূর্ণ টীকা, নোট, ব্যাখ্যা ও সূত্রতথ্য সংগ্রহ
@@ -489,7 +775,30 @@ function extractBookNotes($plain, $book = []) {
         $line = trim($lines[$i]);
         if ($line === '') continue;
         $info = classifyBookNoteHeading($line);
-        if ($info === null) continue;
+        if ($info === null) {
+            if (preg_match('/\(\s*(?:তথ্যসূত্র|সূত্রতথ্য)/u', $line)) {
+                foreach (extractInlineSutraCitations($line) as $citeBody) {
+                    $counters['সূত্রতথ্য']++;
+                    $numBn = toBengaliNum($counters['সূত্রতথ্য']);
+                    $label = 'সূত্রতথ্য (' . $numBn . ')';
+                    $anchorId = 'mw-note-' . $noteIdx;
+                    $noteIdx++;
+                    $body = $citeBody;
+                    if (mb_strlen($body) > 260) {
+                        $body = mb_substr($body, 0, 257) . '…';
+                    }
+                    $notes[] = [
+                        'type' => 'সূত্রতথ্য',
+                        'label' => $label,
+                        'title' => $label,
+                        'body' => $body,
+                        'needle' => mb_substr($body, 0, 45),
+                        'anchor' => $anchorId,
+                    ];
+                }
+            }
+            continue;
+        }
         $type = $info['type'];
         $counters[$type]++;
         $numBn = toBengaliNum($counters[$type]);
@@ -578,6 +887,7 @@ if ($fullAccess) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= htmlspecialchars($book['title']) ?> - Mythoscopedia</title>
     <style>
+        <?= renderBookFontCss($book) ?>
         :root {
             --accent: <?= $accent ?>;
             --wp-border: #a2a9b1;
@@ -598,9 +908,9 @@ if ($fullAccess) {
             width: 100%;
             max-width: 100%;
             overflow-x: clip;
-            background: var(--wp-bg-soft);
+            background: #edf1f7;
             color: var(--wp-ink);
-            font-family: 'Times New Roman', 'SolaimanLipi', 'Al-Majid Quranic', 'Noto Sans Bengali', 'Noto Naskh Arabic', serif;
+            font-family: var(--font-book);
             font-size: 15px;
             line-height: 1.65;
         }
@@ -611,12 +921,13 @@ if ($fullAccess) {
         /* ---------- বাম ফিক্সড সাইডবার (উইকিপিডিয়া Vector) ---------- */
         .mw-app {
             width: 100%;
-            max-width: 1280px;
+            max-width: 1320px;
             margin: 0 auto;
             display: flex;
             align-items: flex-start;
             background: var(--wp-bg);
             min-height: 100vh;
+            box-shadow: 0 10px 40px rgba(15, 23, 42, .07);
         }
         @media (min-width: 1281px) {
             .mw-app {
@@ -627,22 +938,30 @@ if ($fullAccess) {
         .mw-sidebar {
             position: sticky; top: 0;
             width: var(--wp-sidebar-w); height: 100vh; flex: none;
-            background: var(--wp-bg-soft);
-            border-right: 1px solid var(--wp-border-soft);
+            background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+            border-right: 1px solid #e2e8f0;
             overflow-y: auto; padding: 0 0 2rem;
             z-index: 20;
+            scrollbar-width: thin;
+            scrollbar-color: #cbd5e1 transparent;
         }
         .mw-logo {
             display: flex; align-items: center; gap: 10px;
-            padding: 14px 16px; border-bottom: 1px solid var(--wp-border-soft);
+            padding: 15px 16px;
+            background: linear-gradient(135deg, rgba(255,255,255,.95), rgba(248,250,252,.85));
+            border-bottom: 1px solid #e2e8f0;
         }
-        .mw-logo img { width: 40px; height: 40px; object-fit: cover; border-radius: 50%; }
-        .mw-logo .mw-logo-text { font-weight: 700; line-height: 1.2; }
-        .mw-logo .mw-logo-text small { display: block; color: var(--wp-muted); font-weight: 400; font-size: 11px; }
-        .mw-nav { padding: 10px 8px; }
+        .mw-logo img {
+            width: 42px; height: 42px; object-fit: cover; border-radius: 50%;
+            border: 2px solid color-mix(in srgb, var(--accent) 45%, #ffffff);
+            box-shadow: 0 2px 8px rgba(15, 23, 42, .12);
+        }
+        .mw-logo .mw-logo-text { font-weight: 700; line-height: 1.2; color: #0f172a; }
+        .mw-logo .mw-logo-text small { display: block; color: var(--wp-muted); font-weight: 400; font-size: 11px; margin-top: 2px; }
+        .mw-nav { padding: 12px 10px; }
         .mw-nav .mw-nav-title {
             font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-            color: var(--wp-muted); font-weight: 700; padding: 8px 10px 4px;
+            color: var(--wp-muted); font-weight: 700; padding: 8px 10px 6px;
         }
         .mw-nav .mw-nav-title .mw-nav-title-main {
             font-size: 16px;
@@ -650,12 +969,15 @@ if ($fullAccess) {
             color: #e91e63;
         }
         .mw-nav a.mw-back {
-            display: block; padding: 8px 10px; border-radius: 4px;
-            background: var(--accent); color: #fff; font-weight: 700; text-align: center; margin-bottom: 12px;
+            display: block; padding: 9px 12px; border-radius: 8px;
+            background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 82%, #0f172a));
+            color: #fff; font-weight: 700; text-align: center; margin-bottom: 12px;
+            box-shadow: 0 3px 10px rgba(15, 23, 42, .14);
+            transition: transform .15s ease, filter .15s ease;
         }
-        .mw-nav a.mw-back:hover { text-decoration: none; filter: brightness(.95); }
+        .mw-nav a.mw-back:hover { text-decoration: none; filter: brightness(1.05); transform: translateY(-1px); }
         .mw-toc-list { list-style: none; margin: 0; padding: 0; }
-        .mw-toc-list li { margin: 0; }
+        .mw-toc-list li { margin: 1px 0; }
         .mw-toc-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 2px; }
         .mw-toc-row .mw-toc-link {
             flex: 1 1 auto; min-width: 0;
@@ -664,10 +986,11 @@ if ($fullAccess) {
         .mw-toc-link,
         .mw-toc-link:visited {
             display: flex; align-items: center; gap: 6px;
-            padding: 6px 8px; border-radius: 4px; color: #bf3c2c; font-size: 14px;
+            padding: 6px 9px; border-radius: 6px; color: #bf3c2c; font-size: 14px;
+            transition: background-color .15s ease, color .15s ease;
         }
-        .mw-toc-link:hover { background: var(--wp-border-soft); text-decoration: none; }
-        .mw-toc-link.active { background: var(--wp-border-soft); font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
+        .mw-toc-link:hover { background: #e2e8f0; text-decoration: none; }
+        .mw-toc-link.active { background: #e2e8f0; font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
         .mw-toc-link.mw-toc-appendix,
         .mw-toc-link.mw-toc-appendix:visited {
             color: var(--wp-link);
@@ -703,36 +1026,42 @@ if ($fullAccess) {
         .mw-addchap button:hover { filter: brightness(.95); }
 
         /* ---------- মূল অংশ ---------- */
-        .mw-main { margin-left: 0; flex: 1 1 auto; min-width: 0; overflow-x: clip; }
+        .mw-main { margin-left: 0; flex: 1 1 auto; min-width: 0; overflow-x: clip; background: #fbfcfe; }
         .mw-topbar {
             position: sticky; top: 0; z-index: 15;
-            background: var(--wp-bg); border-bottom: 1px solid var(--wp-border-soft);
-            padding: 8px clamp(12px, 3vw, 32px);
-            display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+            background: rgba(255, 255, 255, .93);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom: 1px solid #e2e8f0;
+            box-shadow: 0 2px 12px rgba(15, 23, 42, .04);
+            padding: 9px clamp(12px, 2.5vw, 28px);
+            display: flex; flex-wrap: wrap; gap: 7px; align-items: center;
         }
-        .mw-topbar .mw-tabs { display: flex; gap: 2px; margin-right: auto; }
+        .mw-topbar .mw-tabs { display: flex; gap: 4px; margin-right: auto; }
         .mw-tab {
-            padding: 6px 12px; border: 1px solid var(--wp-border-soft); border-bottom: none;
-            border-radius: 4px 4px 0 0; background: var(--wp-bg-soft); color: var(--wp-ink);
+            padding: 6px 13px; border: 1px solid #e2e8f0; border-bottom: none;
+            border-radius: 8px 8px 0 0; background: #f1f5f9; color: var(--wp-ink);
             font-size: 13px; cursor: pointer; font-family: inherit;
+            transition: background-color .15s, color .15s;
         }
-        .mw-tab.active { background: var(--wp-bg); font-weight: 700; border-color: var(--wp-border-soft); }
+        .mw-tab.active { background: var(--wp-bg); font-weight: 700; border-color: #cbd5e1; color: var(--accent); }
         .mw-tool {
-            padding: 6px 10px; border: 1px solid var(--wp-border); border-radius: 4px;
+            padding: 6px 11px; border: 1px solid #cbd5e1; border-radius: 7px;
             background: var(--wp-bg); color: var(--wp-ink); font-size: 13px; cursor: pointer; font-family: inherit;
+            transition: background-color .15s, border-color .15s, transform .12s;
         }
-        .mw-tool:hover { background: var(--wp-bg-soft); }
-        .mw-tool.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
-        .mw-tool.primary:hover { filter: brightness(.95); }
+        .mw-tool:hover { background: #f1f5f9; border-color: #94a3b8; text-decoration: none; }
+        .mw-tool.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; box-shadow: 0 2px 6px rgba(15, 23, 42, .12); }
+        .mw-tool.primary:hover { filter: brightness(1.06); }
         .mw-tool.danger { background: #d73333; color: #fff; border-color: #d73333; font-weight: 700; }
         .mw-tool.plain { background: var(--wp-bg-soft); }
         .mw-select {
-            padding: 6px 8px; border: 1px solid var(--wp-border); border-radius: 4px;
+            padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 7px;
             background: var(--wp-bg); color: var(--wp-ink); font-size: 13px; font-family: inherit;
         }
-        .mw-color { width: 34px; height: 30px; padding: 0; border: 1px solid var(--wp-border); border-radius: 4px; background: none; cursor: pointer; }
+        .mw-color { width: 34px; height: 30px; padding: 0; border: 1px solid #cbd5e1; border-radius: 7px; background: none; cursor: pointer; }
 
-        .mw-content-wrap { padding: clamp(10px, 1.5vw, 18px) 10px clamp(16px, 2vw, 24px) clamp(12px, 2vw, 22px); width: 100%; max-width: 100%; margin: 0 auto; }
+        .mw-content-wrap { padding: clamp(12px, 1.8vw, 22px) clamp(12px, 1.8vw, 20px) clamp(20px, 2.5vw, 32px); width: 100%; max-width: 100%; margin: 0 auto; }
         .mw-paypanel { width: calc(100% - clamp(24px, 4vw, 48px)); max-width: 100%; margin: 16px auto 0; padding: 16px 20px; border: 1px solid var(--wp-border); border-left: 5px solid var(--accent); background: var(--wp-bg-soft); border-radius: 6px; }
         .mw-paypanel h3 { margin: 0 0 8px; font-size: 1.1rem; color: var(--accent); }
         .mw-paypanel p { margin: .3rem 0; font-size: .9rem; }
@@ -743,10 +1072,10 @@ if ($fullAccess) {
         .mw-paynote { color: var(--wp-muted); font-size: .82rem !important; }
         .mw-article {
             background: var(--wp-bg);
-            border: 1px solid var(--wp-border-soft);
-            border-radius: 2px;
-            padding: clamp(16px, 2.6vw, 32px) 12px clamp(18px, 3vw, 36px) clamp(16px, 3vw, 36px);
-            box-shadow: 0 1px 3px rgba(0,0,0,.06);
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: clamp(18px, 2.8vw, 34px) clamp(14px, 2vw, 24px) clamp(22px, 3.2vw, 38px) clamp(18px, 3vw, 38px);
+            box-shadow: 0 6px 24px rgba(15, 23, 42, .05);
             background-clip: padding-box;
             display: flow-root;
             max-width: 100%;
@@ -759,7 +1088,7 @@ if ($fullAccess) {
         .mw-body.papered { <?= $bgStyle ?> color: <?= $textColor ?>; padding: 16px 20px; border-radius: 4px; }
 
         .mw-title {
-            font-family: 'Times New Roman', 'SolaimanLipi', 'Al-Majid Quranic', 'Noto Sans Bengali', 'Noto Naskh Arabic', serif;
+            font-family: var(--font-book);
             font-size: 1.9rem; font-weight: 400; line-height: 1.25;
             margin: 0 0 .4rem; padding-bottom: .3rem; border-bottom: 1px solid var(--wp-border-soft);
         }
@@ -961,11 +1290,176 @@ if ($fullAccess) {
 
         /* ---------- মূল লেখা ---------- */
         .mw-body { min-height: 300px; font-size: 18px; line-height: 1.6; overflow: visible; overflow-wrap: anywhere; text-align: justify; text-justify: inter-word; }
-        .mw-body table { max-width: 100%; font-size: inherit; text-align: initial; line-height: 1.6; }
-        .mw-body td, .mw-body th { overflow-wrap: anywhere; word-break: break-word; line-height: 1.6; }
-        .mw-body table p { line-height: 1.6; }
+        .mw-body sup, .mw-body sub {
+            font-size: 0.72em;
+            line-height: 0;
+            position: relative;
+            vertical-align: baseline;
+            font-weight: 700;
+        }
+        .mw-body sup {
+            top: -0.45em;
+            color: var(--accent);
+            padding: 0 1px;
+        }
+        .mw-body sub {
+            bottom: -0.22em;
+        }
+
+        /* ---------- নান্দনিক ও অত্যাধুনিক টেবিল ডিজাইন ---------- */
+        .mw-table-wrap {
+            width: 100%;
+            overflow-x: auto;
+            margin: 1.5rem 0;
+            border-radius: 14px;
+            border: 1px solid color-mix(in srgb, var(--accent) 24%, #cbd5e1);
+            background: var(--wp-bg);
+            box-shadow: 0 8px 26px rgba(15, 23, 42, .06), 0 1px 3px rgba(15, 23, 42, .04);
+            scrollbar-width: thin;
+            scrollbar-color: color-mix(in srgb, var(--accent) 35%, #cbd5e1) transparent;
+        }
+        .mw-body .mw-table-wrap > table {
+            margin: 0 !important;
+            border-radius: 0;
+        }
+        .mw-body table {
+            width: 100%;
+            max-width: 100%;
+            border-collapse: separate !important;
+            border-spacing: 0 !important;
+            margin: 1.2rem 0;
+            font-size: .92em !important;
+            text-align: initial;
+            line-height: 1.55;
+            background: transparent;
+        }
+        .mw-body table:not([data-mw-table-resized="1"]) {
+            width: 100% !important;
+        }
+        .mw-body table[data-mw-table-resized="1"] {
+            table-layout: fixed;
+            max-width: none;
+        }
+        #mwColResizeGuide {
+            position: fixed;
+            top: 0;
+            width: 2px;
+            background: var(--accent, #2563eb);
+            pointer-events: none;
+            z-index: 9999;
+            display: none;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.75);
+        }
+        #mwColResizeGuide.dragging {
+            width: 3px;
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent, #2563eb) 45%, transparent);
+        }
+        .mw-body td, .mw-body th {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            line-height: 1.55;
+            border: 0 !important;
+            border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, #e2e8f0) !important;
+            border-right: 1px solid color-mix(in srgb, var(--accent) 10%, #e2e8f0) !important;
+            padding: 10px 14px !important;
+            vertical-align: top !important;
+            transition: background-color .15s ease;
+        }
+        .mw-body tr > td:last-child,
+        .mw-body tr > th:last-child {
+            border-right: 0 !important;
+        }
+        .mw-body tbody > tr:last-child > td,
+        .mw-body tbody > tr:last-child > th {
+            border-bottom: 0 !important;
+        }
+        .mw-body thead > tr > th,
+        .mw-body thead > tr > td,
+        .mw-body table > tbody > tr:first-child > td,
+        .mw-body table > tbody > tr:first-child > th {
+            background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 13%, #f8fafc), color-mix(in srgb, var(--accent) 5%, #ffffff)) !important;
+            border-bottom: 2px solid color-mix(in srgb, var(--accent) 42%, #cbd5e1) !important;
+            font-weight: 700;
+            color: #0f172a;
+            padding-top: 11px !important;
+            padding-bottom: 11px !important;
+        }
+        .mw-body table > tbody > tr:nth-child(even):not(:first-child) {
+            background: color-mix(in srgb, var(--accent) 2.5%, #f8fafc);
+        }
+        .mw-body table > tbody > tr:not(:first-child):hover > td {
+            background: color-mix(in srgb, var(--accent) 7%, #ffffff);
+        }
+        .mw-body table p { line-height: 1.55; margin: 0 0 .35em; }
+        .mw-body table p:last-child { margin-bottom: 0; }
+
+        /* ---------- উইকিপিডিয়া ধাঁচের নান্দনিক ছবির ফ্রেম ও পাশে লেখা ---------- */
+        .mw-wiki-thumb {
+            float: right;
+            clear: right;
+            width: fit-content;
+            max-width: min(330px, 46%);
+            margin: 6px 0 16px 22px;
+            padding: 8px;
+            border-radius: 12px;
+            border: 1px solid color-mix(in srgb, var(--accent) 26%, #cbd5e1);
+            background: linear-gradient(180deg, #ffffff 0%, color-mix(in srgb, var(--accent) 3%, #f8fafc) 100%);
+            box-shadow: 0 6px 20px rgba(15, 23, 42, .08), 0 1px 3px rgba(15, 23, 42, .04);
+            box-sizing: border-box;
+        }
+        .mw-wiki-thumb.mw-wiki-thumb-multi {
+            max-width: min(410px, 50%);
+        }
+        .mw-wiki-thumb-media {
+            display: flex;
+            align-items: stretch;
+            justify-content: center;
+            gap: 6px;
+            padding: 4px;
+            background: #ffffff;
+            border: 1px solid #d5dbe3;
+            border-radius: 8px;
+        }
+        .mw-wiki-thumb-media img {
+            display: block;
+            width: auto;
+            max-width: 100%;
+            height: auto;
+            max-height: 360px;
+            object-fit: contain;
+            border-radius: 5px;
+            margin: 0 auto;
+        }
+        .mw-wiki-thumb-multi .mw-wiki-thumb-media img {
+            flex: 1 1 0;
+            min-width: 0;
+            max-height: 240px;
+            object-fit: cover;
+            border: 1px solid #e2e8f0;
+        }
+        .mw-wiki-thumbcaption {
+            padding: 7px 6px 2px;
+            font-size: .82rem;
+            line-height: 1.48;
+            color: var(--wp-muted);
+            text-align: center;
+            font-weight: 500;
+        }
+        .mw-wiki-thumbcaption span {
+            font-size: inherit !important;
+        }
+        @media (max-width: 640px) {
+            .mw-wiki-thumb,
+            .mw-wiki-thumb.mw-wiki-thumb-multi {
+                float: none;
+                max-width: 100%;
+                width: 100%;
+                margin: 1rem auto;
+            }
+        }
+        .mw-body { font-size: 14pt; font-family: var(--font-book); }
         .mw-body h1, .mw-body h2, .mw-body h3, .mw-body h4 {
-            font-family: 'Times New Roman', 'SolaimanLipi', 'Al-Majid Quranic', 'Noto Sans Bengali', 'Noto Naskh Arabic', serif;
+            font-family: var(--font-book);
             font-weight: 400; line-height: 1.3; margin: 1.6rem 0 .6rem; scroll-margin-top: 4rem; text-align: left;
             overflow: hidden;
         }
@@ -991,7 +1485,7 @@ if ($fullAccess) {
 
         /* ---------- রেফারেন্স ---------- */
         .mw-references { margin-top: 2.4rem; border-top: 1px solid var(--wp-border-soft); padding-top: .6rem; }
-        .mw-references h2 { font-family: 'Times New Roman', 'SolaimanLipi', 'Al-Majid Quranic', 'Noto Sans Bengali', 'Noto Naskh Arabic', serif; font-weight: 400; font-size: 1.4rem; border-bottom: 1px solid var(--wp-border-soft); padding-bottom: .25rem; }
+        .mw-references h2 { font-family: var(--font-book); font-weight: 400; font-size: 1.4rem; border-bottom: 1px solid var(--wp-border-soft); padding-bottom: .25rem; }
         .mw-references ol { padding-left: 1.6rem; font-size: .9rem; color: var(--wp-ink); }
         .mw-references .mw-ref-note { color: var(--wp-muted); font-size: .9rem; }
 
@@ -1058,9 +1552,7 @@ if ($fullAccess) {
             box-shadow: 0 8px 36px rgba(15, 23, 42, .06);
         }
         body.mw-public .mw-topbar {
-            background: rgba(255, 255, 255, .94);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, .98);
             gap: 6px;
             padding: 8px clamp(12px, 2.5vw, 24px);
         }
@@ -1182,6 +1674,40 @@ if ($fullAccess) {
         body.mw-public.mw-theme-dark .mw-note-item { background: #111827; border-color: #374151; }
         body.mw-public.mw-theme-dark .mw-note-text { color: #d1d5db; }
         body.mw-public.mw-theme-dark .mw-reader-btn:hover { background: #374151; }
+        body.mw-public.mw-theme-dark .mw-table-wrap {
+            background: #1f2937; border-color: #374151;
+        }
+        body.mw-public.mw-theme-dark .mw-body td,
+        body.mw-public.mw-theme-dark .mw-body th {
+            border-color: #374151 !important;
+        }
+        body.mw-public.mw-theme-dark .mw-body thead > tr > th,
+        body.mw-public.mw-theme-dark .mw-body thead > tr > td,
+        body.mw-public.mw-theme-dark .mw-body table > tbody > tr:first-child > td,
+        body.mw-public.mw-theme-dark .mw-body table > tbody > tr:first-child > th {
+            background: #1e293b !important; color: #f3f4f6; border-bottom-color: #475569 !important;
+        }
+        body.mw-public.mw-theme-dark .mw-body table > tbody > tr:nth-child(even):not(:first-child) {
+            background: rgba(255, 255, 255, .03);
+        }
+        body.mw-public.mw-theme-dark .mw-body table > tbody > tr:not(:first-child):hover > td {
+            background: rgba(255, 255, 255, .06);
+        }
+        body.mw-public.mw-theme-dark .mw-wiki-thumb {
+            background: #1f2937; border-color: #374151;
+        }
+        body.mw-public.mw-theme-dark .mw-wiki-thumb-media {
+            background: #111827; border-color: #374151;
+        }
+        body.mw-public.mw-theme-sepia .mw-table-wrap {
+            background: #fbf5e6; border-color: #decba4;
+        }
+        body.mw-public.mw-theme-sepia .mw-wiki-thumb {
+            background: #f5ebd4; border-color: #d8c298;
+        }
+        body.mw-public.mw-theme-sepia .mw-wiki-thumb-media {
+            background: #fffaf0; border-color: #e4d6b8;
+        }
 
         /* উপরে যাওয়ার ফ্লোটিং বাটন ও টোস্ট */
         .mw-backtop {
@@ -1211,9 +1737,7 @@ if ($fullAccess) {
 </head>
 <body class="<?= $isPublicView ? 'mw-public' : '' ?>">
 
-<?php if ($isPublicView): ?>
 <div class="mw-read-progress" aria-hidden="true"><div class="mw-read-progress-bar" id="mwReadProgressBar"></div></div>
-<?php endif; ?>
 
 <div class="mw-app">
 
@@ -1546,7 +2070,6 @@ if ($fullAccess) {
             </aside>
 
             <div class="mw-article-main">
-                <?php if ($isPublicView): ?>
                 <header class="mw-pub-hero">
                     <div class="mw-pub-hero-meta">
                         <span class="mw-pub-cat"><?= htmlspecialchars($book['category'] ?? 'গ্রন্থ') ?></span>
@@ -1557,11 +2080,11 @@ if ($fullAccess) {
                         <?php if (!empty($bookNotes)): ?>
                             <span class="mw-pub-stat">✦ টীকা ও নোট: <?= toBengaliNum(count($bookNotes)) ?>টি</span>
                         <?php endif; ?>
+                        <span class="mw-pub-stat">📜 <?= htmlspecialchars($currentPaperName) ?></span>
                     </div>
                     <h1 class="mw-pub-hero-title"><?= htmlspecialchars($book['title']) ?></h1>
                     <p class="mw-pub-hero-sub">লেখক: <b><?= htmlspecialchars($book['author'] ?? '') ?></b><?php if (!empty($currentChapter['title']) && $currentChapter['title'] !== ($book['title'] ?? '')): ?> · <?= htmlspecialchars($currentChapter['title']) ?><?php endif; ?></p>
                 </header>
-                <?php endif; ?>
                 <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="true">
                     <?= $isHtml ? $bodyHtml : nl2br($bodyHtml) ?>
                 </div>
@@ -1897,7 +2420,13 @@ window.addEventListener('load', precomputeTocTargets);
 function setEditMode(on, btn) {
     var titleEl = document.getElementById('editableTitle');
     if (titleEl) titleEl.setAttribute('contenteditable', on ? 'true' : 'false');
-    document.getElementById('editableContent').setAttribute('contenteditable', on ? 'true' : 'false');
+    var bodyEl = document.getElementById('editableContent');
+    if (bodyEl) {
+        bodyEl.setAttribute('contenteditable', on ? 'true' : 'false');
+        if (!on) bodyEl.style.cursor = '';
+    }
+    var guide = document.getElementById('mwColResizeGuide');
+    if (!on && guide) guide.style.display = 'none';
     document.querySelectorAll('.mw-tab').forEach(function (t) { t.classList.remove('active'); });
     if (btn) btn.classList.add('active');
 }
@@ -1910,6 +2439,274 @@ window._mwDirty = false;
             window._mwDirty = true;
         });
     }
+})();
+
+/* ---------- সম্পাদনা মোডে মাউস দিয়ে টেবিলের কলাম রিসাইজ ---------- */
+(function () {
+    var bodyEl = document.getElementById('editableContent');
+    if (!bodyEl) return;
+
+    var HIT = 7;
+    var MIN_COL_W = 36;
+    var guide = document.createElement('div');
+    guide.id = 'mwColResizeGuide';
+    document.body.appendChild(guide);
+
+    var dragState = null;
+
+    function isEditActive() {
+        return bodyEl.getAttribute('contenteditable') === 'true';
+    }
+
+    function buildTableGrid(table) {
+        var grid = [];
+        var rows = table.rows;
+        var maxCols = 0;
+        for (var r = 0; r < rows.length; r++) {
+            if (!grid[r]) grid[r] = [];
+            var cIdx = 0;
+            var cells = rows[r].cells;
+            for (var i = 0; i < cells.length; i++) {
+                while (grid[r][cIdx]) cIdx++;
+                var cell = cells[i];
+                var rs = cell.rowSpan || 1;
+                var cs = cell.colSpan || 1;
+                for (var rr = 0; rr < rs; rr++) {
+                    if (!grid[r + rr]) grid[r + rr] = [];
+                    for (var cc = 0; cc < cs; cc++) {
+                        grid[r + rr][cIdx + cc] = cell;
+                    }
+                }
+                cIdx += cs;
+                if (cIdx > maxCols) maxCols = cIdx;
+            }
+        }
+        return { grid: grid, colCount: maxCols };
+    }
+
+    function getCellSpanCols(gridInfo, cell) {
+        var row = cell.parentElement;
+        if (!row) return null;
+        var r = row.rowIndex;
+        var rowGrid = gridInfo.grid[r];
+        if (!rowGrid) return null;
+        var startCol = -1;
+        var endCol = -1;
+        for (var c = 0; c < gridInfo.colCount; c++) {
+            if (rowGrid[c] === cell) {
+                if (startCol === -1) startCol = c;
+                endCol = c;
+            }
+        }
+        if (startCol === -1) return null;
+        return { startCol: startCol, endCol: endCol };
+    }
+
+    function detectResizeTarget(e) {
+        if (!isEditActive()) return null;
+        var target = e.target;
+        if (!target || !target.closest) return null;
+        var cell = target.closest('td, th');
+        if (!cell || !bodyEl.contains(cell)) return null;
+        var table = cell.closest('table');
+        if (!table || !bodyEl.contains(table)) return null;
+
+        var rect = cell.getBoundingClientRect();
+        var gridInfo = buildTableGrid(table);
+        if (gridInfo.colCount < 1) return null;
+        var span = getCellSpanCols(gridInfo, cell);
+        if (!span) return null;
+
+        if (Math.abs(e.clientX - rect.right) <= HIT) {
+            return {
+                table: table,
+                gridInfo: gridInfo,
+                colIndex: span.endCol,
+                borderX: rect.right
+            };
+        }
+        if (Math.abs(e.clientX - rect.left) <= HIT && span.startCol > 0) {
+            return {
+                table: table,
+                gridInfo: gridInfo,
+                colIndex: span.startCol - 1,
+                borderX: rect.left
+            };
+        }
+        return null;
+    }
+
+    function showGuide(x, tableRect, dragging) {
+        guide.style.left = Math.round(x) + 'px';
+        guide.style.top = Math.round(tableRect.top) + 'px';
+        guide.style.height = Math.round(tableRect.height) + 'px';
+        guide.style.display = 'block';
+        if (dragging) {
+            guide.classList.add('dragging');
+        } else {
+            guide.classList.remove('dragging');
+        }
+    }
+
+    function hideGuide() {
+        guide.style.display = 'none';
+        guide.classList.remove('dragging');
+    }
+
+    function prepareTableColumns(table, gridInfo) {
+        var colCount = gridInfo.colCount;
+        var tableRect = table.getBoundingClientRect();
+        var widths = [];
+
+        for (var c = 0; c < colCount; c++) {
+            var w = 0;
+            for (var r = 0; r < gridInfo.grid.length; r++) {
+                var cell = gridInfo.grid[r] && gridInfo.grid[r][c];
+                if (cell && (cell.colSpan || 1) === 1) {
+                    w = cell.getBoundingClientRect().width;
+                    break;
+                }
+            }
+            if (!w || w <= 0) {
+                w = tableRect.width / colCount;
+            }
+            widths.push(w);
+        }
+
+        // Remove inline/attribute widths on cells so <colgroup> controls column widths cleanly
+        var cells = table.querySelectorAll('td, th');
+        for (var i = 0; i < cells.length; i++) {
+            cells[i].style.width = '';
+            cells[i].removeAttribute('width');
+        }
+
+        var colgroup = table.querySelector(':scope > colgroup');
+        if (!colgroup) {
+            colgroup = document.createElement('colgroup');
+            table.insertBefore(colgroup, table.firstChild);
+        } else {
+            colgroup.innerHTML = '';
+        }
+
+        var totalW = widths.reduce(function (a, b) { return a + b; }, 0) || tableRect.width || 1;
+        var cols = [];
+        for (var k = 0; k < colCount; k++) {
+            var col = document.createElement('col');
+            col.style.width = ((widths[k] / totalW) * 100).toFixed(3) + '%';
+            colgroup.appendChild(col);
+            cols.push(col);
+        }
+
+        table.setAttribute('data-mw-table-resized', '1');
+        table.style.tableLayout = 'fixed';
+        if (!table.style.width) {
+            table.style.width = '100%';
+        }
+
+        return {
+            cols: cols,
+            widths: widths,
+            totalW: totalW
+        };
+    }
+
+    bodyEl.addEventListener('mousemove', function (e) {
+        if (dragState) return;
+        var hit = detectResizeTarget(e);
+        if (hit) {
+            bodyEl.style.cursor = 'col-resize';
+            showGuide(hit.borderX, hit.table.getBoundingClientRect(), false);
+        } else {
+            if (bodyEl.style.cursor === 'col-resize') {
+                bodyEl.style.cursor = '';
+            }
+            hideGuide();
+        }
+    });
+
+    bodyEl.addEventListener('mouseleave', function () {
+        if (dragState) return;
+        bodyEl.style.cursor = '';
+        hideGuide();
+    });
+
+    bodyEl.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        var hit = detectResizeTarget(e);
+        if (!hit) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        var prep = prepareTableColumns(hit.table, hit.gridInfo);
+        var tableRect = hit.table.getBoundingClientRect();
+
+        dragState = {
+            table: hit.table,
+            colIndex: hit.colIndex,
+            colCount: hit.gridInfo.colCount,
+            cols: prep.cols,
+            startWidths: prep.widths.slice(),
+            startTotalW: prep.totalW,
+            startX: e.clientX,
+            startBorderX: hit.borderX,
+            moved: false
+        };
+
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        showGuide(hit.borderX, tableRect, true);
+    });
+
+    document.addEventListener('mousemove', function (e) {
+        if (!dragState) return;
+        var dx = e.clientX - dragState.startX;
+        if (Math.abs(dx) > 1) dragState.moved = true;
+
+        var idx = dragState.colIndex;
+        var widths = dragState.startWidths.slice();
+        var totalW = dragState.startTotalW;
+        var guideX = dragState.startBorderX + dx;
+
+        if (idx < dragState.colCount - 1) {
+            var pairW = widths[idx] + widths[idx + 1];
+            var minW = Math.min(MIN_COL_W, Math.max(16, pairW / 4));
+            var newW1 = Math.max(minW, Math.min(pairW - minW, widths[idx] + dx));
+            var newW2 = pairW - newW1;
+            widths[idx] = newW1;
+            widths[idx + 1] = newW2;
+            guideX = dragState.startBorderX + (newW1 - dragState.startWidths[idx]);
+        } else {
+            var minLast = Math.min(MIN_COL_W, widths[idx]);
+            var newLast = Math.max(minLast, widths[idx] + dx);
+            var delta = newLast - widths[idx];
+            widths[idx] = newLast;
+            totalW = Math.max(160, dragState.startTotalW + delta);
+            dragState.table.style.width = Math.round(totalW) + 'px';
+            guideX = dragState.startBorderX + delta;
+        }
+
+        for (var i = 0; i < dragState.cols.length; i++) {
+            dragState.cols[i].style.width = ((widths[i] / totalW) * 100).toFixed(3) + '%';
+        }
+
+        showGuide(guideX, dragState.table.getBoundingClientRect(), true);
+    });
+
+    function endDrag() {
+        if (!dragState) return;
+        if (dragState.moved) {
+            window._mwDirty = true;
+        }
+        dragState = null;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        bodyEl.style.cursor = '';
+        hideGuide();
+    }
+
+    document.addEventListener('mouseup', endDrag);
+    window.addEventListener('blur', endDrag);
 })();
 
 function savePage(toPublic) {
@@ -2186,13 +2983,38 @@ document.addEventListener('keydown', function (e) {
         if (mv && mv.style.display === 'flex') closeMobilePreview();
     }
 });
+
+(function () {
+    const progressBar = document.getElementById('mwReadProgressBar');
+    const backTop = document.getElementById('mwBackTop');
+    function updateDefaultScrollUI() {
+        const doc = document.documentElement;
+        const maxScroll = Math.max(1, doc.scrollHeight - window.innerHeight);
+        const y = window.scrollY || window.pageYOffset || 0;
+        if (progressBar) {
+            progressBar.style.width = Math.min(100, Math.max(0, (y / maxScroll) * 100)).toFixed(2) + '%';
+        }
+        if (backTop) {
+            backTop.classList.toggle('show', y > 360);
+        }
+    }
+    let tick = false;
+    window.addEventListener('scroll', function () {
+        if (tick) return;
+        tick = true;
+        requestAnimationFrame(function () {
+            tick = false;
+            updateDefaultScrollUI();
+        });
+    }, { passive: true });
+    window.addEventListener('load', updateDefaultScrollUI);
+})();
 <?php endif; ?>
 </script>
 
 <div class="mw-toast" id="mwToast" role="status" aria-live="polite"></div>
-<?php if ($isPublicView): ?>
 <button type="button" class="mw-backtop" id="mwBackTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="উপরে যান" aria-label="উপরে যান">↑</button>
-<?php else: ?>
+<?php if (!$isPublicView): ?>
 <!-- মোবাইল ভিউ প্রিভিউ মডাল -->
 <div class="mv-modal" id="mobilePreviewModal" onclick="if(event.target===this)closeMobilePreview()">
     <div class="mv-box">

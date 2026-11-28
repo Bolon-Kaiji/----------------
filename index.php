@@ -89,7 +89,7 @@ function docxToHtml($path, $mediaDir, $srcPrefix, $skipSet = []) {
 
     $renderRun = function ($run) use (&$renderRun, $NS_W, $NS_A, $NS_R, $rels, $zip, $mediaDir, $srcPrefix, &$imgCount) {
         $rpr = $run->getElementsByTagNameNS($NS_W, 'rPr')->item(0);
-        $bold = $italic = $underline = false; $color = ''; $fontSize = ''; $fontFamily = '';
+        $bold = $italic = $underline = false; $color = ''; $fontSize = ''; $fontFamily = ''; $vertAlign = '';
         if ($rpr) {
             $bold = $rpr->getElementsByTagNameNS($NS_W, 'b')->length > 0;
             $italic = $rpr->getElementsByTagNameNS($NS_W, 'i')->length > 0;
@@ -101,6 +101,8 @@ function docxToHtml($path, $mediaDir, $srcPrefix, $skipSet = []) {
             if ($sz) $fontSize = $sz->getAttributeNS($NS_W, 'val');
             $rf = $rpr->getElementsByTagNameNS($NS_W, 'rFonts')->item(0);
             if ($rf) $fontFamily = $rf->getAttributeNS($NS_W, 'ascii');
+            $va = $rpr->getElementsByTagNameNS($NS_W, 'vertAlign')->item(0);
+            if ($va) $vertAlign = $va->getAttributeNS($NS_W, 'val');
         }
         $inner = '';
         foreach ($run->childNodes as $child) {
@@ -133,8 +135,10 @@ function docxToHtml($path, $mediaDir, $srcPrefix, $skipSet = []) {
         if ($italic) $style .= 'font-style:italic;';
         if ($underline) $style .= 'text-decoration:underline;';
         if ($color && preg_match('/^[0-9A-Fa-f]{6}$/', $color)) $style .= 'color:#' . $color . ';';
-        if ($fontSize) $style .= 'font-size:' . (intval($fontSize) / 2) . 'pt;';
-        if ($style !== '') return '<span style="' . $style . '">' . $inner . '</span>';
+        if ($fontSize && $vertAlign !== 'superscript' && $vertAlign !== 'subscript') $style .= 'font-size:' . (intval($fontSize) / 2) . 'pt;';
+        if ($style !== '') $inner = '<span style="' . $style . '">' . $inner . '</span>';
+        if ($vertAlign === 'superscript') return '<sup>' . $inner . '</sup>';
+        if ($vertAlign === 'subscript') return '<sub>' . $inner . '</sub>';
         return $inner;
     };
 
@@ -149,6 +153,7 @@ function docxToHtml($path, $mediaDir, $srcPrefix, $skipSet = []) {
                 }
             }
         }
+        $s = str_replace(['</sup><sup>', '</sub><sub>'], '', $s);
         return $s;
     };
 
@@ -350,60 +355,241 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mythoscopia - ১০০ বইয়ের মহাপরিকল্পনা</title>
-    <link rel="stylesheet" href="https://fonts.maateen.me/solaiman-lipi/font.css">
     <style>
-        @font-face {
-            font-family: 'SolaimanLipi';
-            src: local('SolaimanLipi'),
-                 url('https://cdn.jsdelivr.net/gh/potatosalad/solaimanlipi@master/SolaimanLipi.woff') format('woff'),
-                 url('https://fonts.maateen.me/solaiman-lipi/font/SolaimanLipi.woff') format('woff');
-            font-display: swap;
+        <?= renderBookFontCss() ?>
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: var(--font-book);
+            background: linear-gradient(180deg, #f8f5ee 0%, #f1ede2 100%);
+            margin: 0; padding: 0; color: #1e293b; min-height: 100vh;
         }
-        body { font-family: 'Times New Roman', 'SolaimanLipi', Times, serif; background: #f4f1ea; margin: 0; padding: 0; color: #222; }
         button, input, select, textarea { font-family: inherit; }
-        header { background: #1e293b; color: #fff; padding: 15px 0; }
+        header {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 65%, #273449 100%);
+            color: #fff; padding: 16px 0;
+            border-bottom: 3px solid #f59e0b;
+            box-shadow: 0 4px 18px rgba(15, 23, 42, 0.16);
+        }
         .header-inner { max-width: 1200px; margin: 0 auto; padding: 0 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
-        header h1 { margin: 0; font-size: 24px; color: #f59e0b; }
-        .btn { padding: 10px 18px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px; }
-        .btn-primary { background: #f59e0b; color: #000; }
+        header h1 { margin: 0; font-size: 25px; color: #fbbf24; letter-spacing: 0.04em; }
+        header small { color: #cbd5e1; font-size: 13px; }
+        .btn { padding: 10px 18px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease; }
+        .btn:hover { transform: translateY(-1px); filter: brightness(1.03); }
+        .btn:active { transform: translateY(0); }
+        .btn-primary { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,0.18); box-shadow: 0 2px 8px rgba(217, 119, 6, 0.25); }
         .btn-dark { background: #334155; color: #fff; }
-        .container { max-width: 1200px; margin: 20px auto; padding: 0 20px; }
-        .alert { background: #dcfce7; color: #166534; padding: 12px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #86efac; }
+        .container { max-width: 1200px; margin: 24px auto 48px; padding: 0 20px; }
+        .alert { background: #dcfce7; color: #166534; padding: 12px 16px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #86efac; box-shadow: 0 2px 8px rgba(22, 101, 52, 0.08); }
         
         /* আপলোড ড্যাশবোর্ড */
-        #uploadPanel { display: block; background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        #uploadPanel { display: block; background: #fff; padding: 26px; border-radius: 14px; border: 1px solid rgba(15, 23, 42, 0.07); box-shadow: 0 6px 22px rgba(15, 23, 42, 0.06); margin-bottom: 30px; }
         .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; }
         .form-group { display: flex; flex-direction: column; }
-        .form-group label { font-weight: bold; margin-bottom: 5px; font-size: 13px; }
-        .form-group input, .form-group select, .form-group textarea { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
-        .highlight-upload { background: #fef3c7; border: 2px dashed #d97706; padding: 15px; border-radius: 6px; margin-top: 15px; }
-        .paper-box { background: #f8fafc; padding: 12px; border: 1px dashed #94a3b8; border-radius: 6px; margin-top: 15px; }
+        .form-group label { font-weight: bold; margin-bottom: 5px; font-size: 13px; color: #334155; }
+        .form-group input, .form-group select, .form-group textarea { padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 6px; transition: border-color 0.15s, box-shadow 0.15s; }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #d97706; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18); }
+        .highlight-upload { background: #fffbeb; border: 2px dashed #d97706; padding: 15px; border-radius: 10px; margin-top: 15px; }
+        .paper-box { background: #f8fafc; padding: 12px; border: 1px dashed #94a3b8; border-radius: 10px; margin-top: 15px; }
         
-        /* বইয়ের গ্রিড */
-        .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 25px; }
-        .book-card { background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.08); position: relative; transition: transform 0.2s; }
-        .book-card:hover { transform: translateY(-5px); }
-        .cover-wrap { position: relative; height: 290px; background: #cbd5e1; cursor: pointer; }
-        .cover-wrap img { width: 100%; height: 100%; object-fit: cover; }
-        .price-badge { position: absolute; top: 10px; right: 10px; background: #dc2626; color: #fff; padding: 5px 10px; border-radius: 20px; font-weight: bold; font-size: 13px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
-        .edit-price-btn { position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,0.75); color: #fff; border: none; padding: 5px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; }
-        .book-info { padding: 15px; }
-        .book-info h3 { margin: 0 0 5px; font-size: 17px; }
-        .book-info p { margin: 3px 0; font-size: 13px; color: #555; }
-        .author-mini { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-        .author-mini img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+        /* বইয়ের তালিকা হেডার ও সার্চ/ফিল্টার বার */
+        .book-list-section {
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 16px;
+            padding: 22px 24px 28px;
+            box-shadow: 0 8px 28px rgba(15, 23, 42, 0.05);
+        }
+        .book-list-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding-bottom: 16px;
+            margin-bottom: 22px;
+            border-bottom: 2px solid #efe7d6;
+        }
+        .book-list-title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        #bookList {
+            margin: 0;
+            scroll-margin-top: 20px;
+            font-size: 24px;
+            color: #0f172a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .book-count-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 12px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: bold;
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            color: #92400e;
+            border: 1px solid #f59e0b;
+        }
+        .book-list-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        .book-search-input {
+            padding: 9px 14px;
+            border: 1px solid #cbd5e1;
+            border-radius: 999px;
+            background: #fff;
+            font-size: 14px;
+            min-width: 220px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .book-search-input:focus {
+            outline: none;
+            border-color: #d97706;
+            box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+        }
+        .book-filter-select {
+            padding: 9px 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 999px;
+            background: #fff;
+            font-size: 13.5px;
+            color: #1e293b;
+            cursor: pointer;
+        }
+        .book-filter-select:focus {
+            outline: none;
+            border-color: #d97706;
+        }
+
+        /* বইয়ের গ্রিড ও কার্ড */
+        .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 24px; }
+        .book-card {
+            background: #fff;
+            border-radius: 14px;
+            overflow: hidden;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            box-shadow: 0 6px 18px rgba(15, 23, 42, 0.07);
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+        }
+        .book-card:hover {
+            transform: translateY(-6px);
+            box-shadow: 0 16px 32px rgba(15, 23, 42, 0.13);
+            border-color: rgba(217, 119, 6, 0.45);
+        }
+        .cover-wrap {
+            position: relative;
+            height: 300px;
+            background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
+            cursor: pointer;
+            overflow: hidden;
+        }
+        .cover-wrap img {
+            width: 100%; height: 100%; object-fit: cover;
+            transition: transform 0.38s ease;
+        }
+        .book-card:hover .cover-wrap img { transform: scale(1.04); }
+        .cover-wrap::after {
+            content: '';
+            position: absolute; inset: 0;
+            background: linear-gradient(180deg, rgba(15,23,42,0.18) 0%, rgba(15,23,42,0) 35%, rgba(15,23,42,0.45) 100%);
+            pointer-events: none;
+        }
+        .price-badge {
+            position: absolute; top: 12px; right: 12px; z-index: 2;
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            color: #fff; padding: 5px 12px; border-radius: 999px;
+            font-weight: bold; font-size: 13px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.28);
+            border: 1px solid rgba(255,255,255,0.25);
+        }
+        .edit-price-btn {
+            position: absolute; bottom: 10px; right: 10px; z-index: 2;
+            background: rgba(15, 23, 42, 0.78);
+            backdrop-filter: blur(4px);
+            color: #fff; border: 1px solid rgba(255,255,255,0.2);
+            padding: 5px 10px; border-radius: 6px; font-size: 11.5px; cursor: pointer;
+            transition: background 0.15s ease;
+        }
+        .edit-price-btn:hover { background: rgba(15, 23, 42, 0.95); }
+        .book-info {
+            padding: 16px 16px 18px;
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+        }
+        .book-info h3 {
+            margin: 0 0 8px; font-size: 18px; line-height: 1.35; color: #0f172a;
+        }
+        .book-meta-tags {
+            display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;
+        }
+        .book-tag {
+            display: inline-flex; align-items: center;
+            padding: 2px 9px; border-radius: 999px;
+            font-size: 12px; font-weight: 600;
+            background: #f1f5f9; color: #334155;
+            border: 1px solid #e2e8f0;
+        }
+        .book-tag.cat { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+        .book-tag.access-free { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+        .book-tag.access-paid { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+        .author-mini {
+            display: flex; align-items: center; gap: 9px;
+            margin-top: auto; padding-top: 10px;
+            border-top: 1px solid #f1f5f9;
+            font-size: 13.5px; color: #334155; font-weight: 600;
+        }
+        .author-mini img {
+            width: 30px; height: 30px; border-radius: 50%; object-fit: cover;
+            border: 2px solid #f59e0b;
+        }
+        .book-card-actions {
+            display: flex; gap: 8px; margin-top: 12px;
+        }
+        .book-card-actions .btn-read-main {
+            flex: 1 1 auto;
+            padding: 9px 12px;
+            border-radius: 8px;
+            font-size: 13.5px;
+        }
+        .book-card-actions .btn-read-public {
+            padding: 9px 11px;
+            border-radius: 8px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            border: 1px solid #bfdbfe;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: bold;
+            display: inline-flex; align-items: center; justify-content: center;
+            transition: background 0.15s ease;
+        }
+        .book-card-actions .btn-read-public:hover { background: #dbeafe; }
 
         /* পপআপ মডাল */
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 1000; }
-        .modal-content { background: #fff; padding: 25px; border-radius: 10px; max-width: 650px; width: 90%; text-align: center; position: relative; }
-        .close-modal { position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; }
-        .paper-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 12px; margin-top: 20px; }
-        .paper-choice { border: 2px solid #cbd5e1; border-radius: 8px; padding: 8px; cursor: pointer; transition: 0.2s; }
-        .paper-choice:hover { border-color: #f59e0b; transform: scale(1.05); }
-        .paper-choice img { width: 100%; height: 90px; object-fit: cover; border-radius: 4px; }
-        .paper-choice span { display: block; margin-top: 6px; font-size: 12px; font-weight: bold; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.65); backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: #fff; padding: 28px; border-radius: 16px; max-width: 660px; width: 92%; text-align: center; position: relative; box-shadow: 0 20px 50px rgba(0,0,0,0.28); }
+        .close-modal { position: absolute; top: 12px; right: 16px; font-size: 26px; cursor: pointer; color: #64748b; }
+        .close-modal:hover { color: #0f172a; }
+        .paper-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 14px; margin-top: 20px; }
+        .paper-choice { border: 2px solid #e2e8f0; border-radius: 10px; padding: 8px; cursor: pointer; transition: 0.2s; background: #fff; }
+        .paper-choice:hover { border-color: #f59e0b; transform: translateY(-2px); box-shadow: 0 6px 14px rgba(245, 158, 11, 0.18); }
+        .paper-choice img { width: 100%; height: 90px; object-fit: cover; border-radius: 6px; }
+        .paper-choice span { display: block; margin-top: 6px; font-size: 12.5px; font-weight: bold; color: #1e293b; }
         .empty-msg { grid-column: 1 / -1; color: #64748b; padding: 40px; text-align: center; }
-        .file-badge { position: absolute; top: 10px; left: 10px; background: #0ea5e9; color: #fff; padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+        .file-badge { position: absolute; top: 12px; left: 12px; z-index: 2; background: rgba(14, 165, 233, 0.92); backdrop-filter: blur(4px); color: #fff; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: bold; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
         .audio-btn-listen, .audio-btn-stop { padding: 10px 16px; border: 1px solid #a2a9b1; border-radius: 5px; color: #fff; font-size: 14px; font-weight: bold; cursor: pointer; }
         .audio-btn-listen { background: #22c55e; }
         .audio-btn-stop { background: #dc2626; }
@@ -660,41 +846,82 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     </div>
 
     <!-- বইয়ের গ্রিড -->
-    <h2 id="bookList" style="margin-top:10px; scroll-margin-top: 16px;">বইয়ের তালিকা (মোট <?= count($books) ?>টি)</h2>
-    <div class="book-grid">
-        <?php if (empty($books)): ?>
-            <div class="empty-msg">এখনো কোনো বই যুক্ত করা হয়নি। উপরের ফর্ম থেকে প্রথম বই যুক্ত করুন।</div>
-        <?php else: ?>
-            <?php foreach ($books as $bid => $book): ?>
-                <div class="book-card">
-                    <div class="cover-wrap" onclick="openBook('<?= htmlspecialchars($bid) ?>')">
-                        <?php if (!empty($book['cover'])): ?>
-                            <img src="<?= htmlspecialchars($book['cover']) ?>" alt="কভার">
-                        <?php else: ?>
-                            <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-weight:bold;">কভার নেই</div>
-                        <?php endif; ?>
-                        <?php if (!empty($book['full_book_file'])): ?>
-                            <span class="file-badge">📄 সম্পূর্ণ ফাইল</span>
-                        <?php endif; ?>
-                        <span class="price-badge"><?= htmlspecialchars($book['price']) ?></span>
-                        <button class="edit-price-btn" onclick="event.stopPropagation(); editPrice('<?= htmlspecialchars($bid) ?>')">✏️ দাম সম্পাদনা</button>
-                    </div>
-                    <div class="book-info">
-                        <h3><?= htmlspecialchars($book['title']) ?></h3>
-                        <p><?= htmlspecialchars($book['category']) ?> · <?= htmlspecialchars($book['pages']) ?></p>
-                        <p>অ্যাক্সেস: <?= htmlspecialchars($book['access']) ?></p>
-                        <div class="author-mini">
-                            <?php if (!empty($book['author_img'])): ?>
-                                <img src="<?= htmlspecialchars($book['author_img']) ?>" alt="লেখক">
+    <section class="book-list-section">
+        <div class="book-list-header">
+            <div class="book-list-title-wrap">
+                <h2 id="bookList">📚 বইয়ের তালিকা</h2>
+                <span class="book-count-pill" id="bookCountBadge">মোট <?= count($books) ?>টি</span>
+            </div>
+            <div class="book-list-controls">
+                <input type="search" id="bookSearchInput" class="book-search-input" placeholder="🔍 বই বা লেখকের নাম খুঁজুন..." oninput="filterBookList()">
+                <select id="bookCategoryFilter" class="book-filter-select" onchange="filterBookList()" aria-label="ক্যাটাগরি ফিল্টার">
+                    <option value="">সব ক্যাটাগরি</option>
+                    <?php
+                    $cats = [];
+                    foreach ($books as $b) {
+                        $c = trim((string)($b['category'] ?? ''));
+                        if ($c !== '') $cats[$c] = true;
+                    }
+                    foreach (array_keys($cats) as $catName): ?>
+                        <option value="<?= htmlspecialchars($catName) ?>"><?= htmlspecialchars($catName) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <select id="bookAccessFilter" class="book-filter-select" onchange="filterBookList()" aria-label="অ্যাক্সেস ফিল্টার">
+                    <option value="">সব অ্যাক্সেস</option>
+                    <option value="ফ্রি">ফ্রি</option>
+                    <option value="সাবস্ক্রিপশন">সাবস্ক্রিপশন</option>
+                    <option value="প্রিমিয়াম">প্রিমিয়াম</option>
+                </select>
+            </div>
+        </div>
+        <div class="book-grid" id="bookGrid">
+            <?php if (empty($books)): ?>
+                <div class="empty-msg">এখনো কোনো বই যুক্ত করা হয়নি। উপরের ফর্ম থেকে প্রথম বই যুক্ত করুন।</div>
+            <?php else: ?>
+                <?php foreach ($books as $bid => $book):
+                    $isFree = ($book['access'] ?? '') === 'ফ্রি';
+                ?>
+                    <div class="book-card"
+                         data-title="<?= htmlspecialchars(mb_strtolower($book['title'] ?? '', 'UTF-8')) ?>"
+                         data-author="<?= htmlspecialchars(mb_strtolower($book['author'] ?? '', 'UTF-8')) ?>"
+                         data-category="<?= htmlspecialchars($book['category'] ?? '') ?>"
+                         data-access="<?= htmlspecialchars($book['access'] ?? '') ?>">
+                        <div class="cover-wrap" onclick="openBook('<?= htmlspecialchars($bid) ?>')">
+                            <?php if (!empty($book['cover'])): ?>
+                                <img src="<?= htmlspecialchars($book['cover']) ?>" alt="কভার">
+                            <?php else: ?>
+                                <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-weight:bold;">কভার নেই</div>
                             <?php endif; ?>
-                            <span><?= htmlspecialchars($book['author']) ?></span>
+                            <?php if (!empty($book['full_book_file'])): ?>
+                                <span class="file-badge">📄 সম্পূর্ণ ফাইল</span>
+                            <?php endif; ?>
+                            <span class="price-badge"><?= htmlspecialchars($book['price']) ?></span>
+                            <button class="edit-price-btn" onclick="event.stopPropagation(); editPrice('<?= htmlspecialchars($bid) ?>')">✏️ দাম সম্পাদনা</button>
                         </div>
-                        <button class="btn btn-primary" style="width:100%; margin-top:10px;" onclick="goRead('<?= htmlspecialchars($bid) ?>','default')">📖 পড়ুন / পুরো বই দেখুন</button>
+                        <div class="book-info">
+                            <h3><?= htmlspecialchars($book['title']) ?></h3>
+                            <div class="book-meta-tags">
+                                <span class="book-tag cat"><?= htmlspecialchars($book['category']) ?></span>
+                                <span class="book-tag"><?= htmlspecialchars($book['pages']) ?></span>
+                                <span class="book-tag <?= $isFree ? 'access-free' : 'access-paid' ?>"><?= htmlspecialchars($book['access']) ?></span>
+                            </div>
+                            <div class="author-mini">
+                                <?php if (!empty($book['author_img'])): ?>
+                                    <img src="<?= htmlspecialchars($book['author_img']) ?>" alt="লেখক">
+                                <?php endif; ?>
+                                <span><?= htmlspecialchars($book['author']) ?></span>
+                            </div>
+                            <div class="book-card-actions">
+                                <button class="btn btn-primary btn-read-main" onclick="goRead('<?= htmlspecialchars($bid) ?>','default')">📖 পড়ুন / পুরো বই দেখুন</button>
+                                <a class="btn-read-public" href="read.php?id=<?= urlencode($bid) ?>&paper=default&view=public" title="পাবলিক ভিউ">🌐</a>
+                            </div>
+                        </div>
                     </div>
-                </div>
-            <?php endforeach; ?>
-        <?php endif; ?>
-    </div>
+                <?php endforeach; ?>
+                <div class="empty-msg" id="bookFilterEmpty" style="display:none;">আপনার অনুসন্ধান অনুযায়ী কোনো বই পাওয়া যায়নি।</div>
+            <?php endif; ?>
+        </div>
+    </section>
 </div>
 
 <!-- কাগজ নির্বাচনের মডাল -->
@@ -780,6 +1007,34 @@ function editPrice(id) {
 document.getElementById('paperModal').addEventListener('click', (e) => {
     if (e.target.id === 'paperModal') closeModal();
 });
+
+function filterBookList() {
+    const q = (document.getElementById('bookSearchInput')?.value || '').trim().toLowerCase();
+    const cat = document.getElementById('bookCategoryFilter')?.value || '';
+    const acc = document.getElementById('bookAccessFilter')?.value || '';
+    const cards = document.querySelectorAll('#bookGrid .book-card');
+    let visible = 0;
+    cards.forEach((card) => {
+        const title = card.getAttribute('data-title') || '';
+        const author = card.getAttribute('data-author') || '';
+        const cCat = card.getAttribute('data-category') || '';
+        const cAcc = card.getAttribute('data-access') || '';
+        const matchQ = !q || title.includes(q) || author.includes(q);
+        const matchCat = !cat || cCat === cat;
+        const matchAcc = !acc || cAcc === acc;
+        const show = matchQ && matchCat && matchAcc;
+        card.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+    const badge = document.getElementById('bookCountBadge');
+    if (badge) {
+        badge.textContent = (visible === cards.length) ? ('মোট ' + cards.length + 'টি') : (visible + ' / ' + cards.length + 'টি');
+    }
+    const empty = document.getElementById('bookFilterEmpty');
+    if (empty) {
+        empty.style.display = (cards.length > 0 && visible === 0) ? 'block' : 'none';
+    }
+}
 </script>
 <script>
 window.addEventListener('load', function () {

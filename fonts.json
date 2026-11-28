@@ -1,0 +1,30 @@
+{
+  "ar": {
+    "family": "Al-Majid Quranic",
+    "sources": [
+      { "url": "fonts/al-majeed-quranic.woff", "format": "woff" },
+      { "url": "fonts/al-majeed-quranic.ttf", "format": "truetype" }
+    ],
+    "weight": "normal",
+    "style": "normal",
+    "display": "swap",
+    "unicodeRange": "U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF"
+  },
+  "en": {
+    "family": "Times New Roman",
+    "fallbacks": ["Times"]
+  },
+  "bn": {
+    "family": "SolaimanLipi",
+    "local": ["SolaimanLipi"],
+    "sources": [
+      { "url": "https://cdn.jsdelivr.net/gh/potatosalad/solaimanlipi@master/SolaimanLipi.woff", "format": "woff" },
+      { "url": "https://fonts.maateen.me/solaiman-lipi/font/SolaimanLipi.woff", "format": "woff" }
+    ],
+    "weight": "normal",
+    "style": "normal",
+    "display": "swap",
+    "unicodeRange": "U+0964-0965, U+0980-09FF, U+200C-200D, U+25CC"
+  },
+  "fallbacks": ["Noto Sans Bengali", "Noto Naskh Arabic", "Times", "serif"]
+}
