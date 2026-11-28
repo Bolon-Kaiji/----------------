@@ -100,8 +100,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $isAdminUser) {
     if (isset($_POST['save_edit'])) {
         $oldPlain = $chapters[$chapIdx]['plain'] ?? '';
         $editedContent = (string)($_POST['edited_content'] ?? '');
-        // রেন্ডারের সময় স্বয়ংক্রিয়ভাবে যুক্ত হওয়া অধ্যায়-ব্যানার, টেবিল র‍্যাপার, ছবির ফ্রেম ও মার্কার সরিয়ে মূল কনটেন্ট সংরক্ষণ
+        // রেন্ডারের সময় স্বয়ংক্রিয়ভাবে যুক্ত হওয়া অধ্যায়-ব্যানার, উপশিরোনাম ক্লাস/আইডি, টেবিল র‍্যাপার, ছবির ফ্রেম ও মার্কার সরিয়ে মূল কনটেন্ট সংরক্ষণ
         $editedContent = preg_replace('/<h2\b[^>]*class="[^"]*\bmw-chapter-title\b[^"]*"[^>]*>.*?<\/h2>/su', '', $editedContent);
+        $editedContent = preg_replace('/\s+id="toc-(?:chap|sub|app)-[0-9-]+"/u', '', $editedContent);
+        $editedContent = preg_replace('/(<p\b[^>]*?)\s+class="mw-sub-title"/u', '$1', $editedContent);
         $editedContent = preg_replace('/<a\b[^>]*id="toc-body-start"[^>]*><\/a>/u', '', $editedContent);
         $editedContent = preg_replace('/<div\b[^>]*class="[^"]*\bmw-table-wrap\b[^"]*"[^>]*>(<table\b.*?<\/table>)<\/div>/su', '$1', $editedContent);
         $editedContent = preg_replace_callback('/<figure\b[^>]*class="[^"]*\bmw-wiki-thumb\b[^"]*"[^>]*>(.*?)<\/figure>/su', function ($m) {
@@ -163,6 +165,33 @@ $currentChapter = $chapters[$chapIdx] ?? ($chapters[0] ?? ['title' => $book['tit
 // সূচিপত্র (বইয়ের প্রথম অধ্যায়ের ভেতর থেকে)
 $plain0 = $chapters[0]['plain'] ?? strip_tags($chapters[0]['content'] ?? '');
 $toc = parseBookToc($plain0);
+$appendixCandidates = [
+    'ব্যবহৃত সঙ্কেতাদি',
+    'পৌরাণিক ৪০ মূলক সংখ্যার সারণী',
+    'শ্বরবিজ্ঞান বিষয়ক শব্দসংক্ষেপ',
+    'ব্যাকরণ বিষয়ক শব্দসংক্ষেপ',
+    'ভাষা বিষয়ক শব্দসংক্ষেপ',
+    'বিষয় বিষয়ক শব্দসংক্ষেপ',
+    'আরবি, ফার্সি, উর্দু ও হিন্দি ভাষার লিপ্যন্তর নিয়মাবলী',
+    'লিপ্যন্তর- ১',
+    'লিপ্যন্তর- ২',
+    'প্রামাণ্য গ্রন্থপঞ্জি',
+    'অন্যান্য গ্রন্থাদি',
+    'কাঁই পরিবারের প্রামাণ্য গ্রন্থপঞ্জি (সন্নিবদ্ধ চলমান)',
+    'কাঁই পরিবারের প্রকাশিত গ্রন্থসমূহ',
+    'বলন বিষয়ক গ্রন্থ',
+    'লালন বিষয়ক গ্রন্থ',
+    'বৈদিক সঙ্কেত',
+];
+$appendixToc = [];
+if ($plain0 !== '') {
+    $plain0Norm = normBnToc($plain0);
+    foreach ($appendixCandidates as $cand) {
+        if (mb_strpos($plain0Norm, normBnToc(tocKey($cand))) !== false) {
+            $appendixToc[] = $cand;
+        }
+    }
+}
 $plainFull = $currentChapter['plain'] ?? strip_tags($currentChapter['content'] ?? '');
 if ($fullAccess) {
     $bodyHtml = $currentChapter['content'];
@@ -191,8 +220,8 @@ if ($fullAccess) {
                 if ($tmp === null || $tmp === $bodyHtml) break;
                 $bodyHtml = $tmp;
             }
-            // অধ্যায়ের শিরোনামগুলোকে নান্দনিক হেডিংয়ে রূপান্তর
-            $bodyHtml = decorateChapterHeadings($bodyHtml, $toc);
+            // অধ্যায়ের শিরোনাম ও উপশিরোনামগুলোকে সূচিপত্র অনুসারে নান্দনিক হেডিংয়ে রূপান্তর
+            $bodyHtml = decorateChapterHeadings($bodyHtml, $toc, $appendixToc ?? []);
         } else {
             $bodyHtml = injectBodyStartMarker($bodyHtml);
         }
@@ -390,30 +419,187 @@ function stripTocFromHtml($html, $plain) {
     return mb_substr($html, 0, $pStart) . '<a id="toc-body-start"></a>' . mb_substr($html, $removeEnd);
 }
 
-// অধ্যায়ের শুরুতে নান্দনিক হেডিং ব্যানার বসানো
-function decorateChapterHeadings($html, $toc) {
-    foreach ($toc as $ch) {
+// বাংলা ইউনিকোড স্বাভাবিকীকরণ (য়/য়, ড়/ড়, ঢ়/ঢ়)
+function normBnToc($s) {
+    $s = (string)$s;
+    if (class_exists('Normalizer')) {
+        $n = Normalizer::normalize($s, Normalizer::FORM_C);
+        if ($n !== false) $s = $n;
+    }
+    return str_replace(
+        ["\xE0\xA6\xAF\xE0\xA6\xBC", "\xE0\xA6\xA1\xE0\xA6\xBC", "\xE0\xA6\xA2\xE0\xA6\xBC"],
+        ["\xE0\xA7\x9F", "\xE0\xA7\x9C", "\xE0\xA7\x9D"],
+        $s
+    );
+}
+
+// তুলনার জন্য শিরোনাম থেকে যতিচিহ্ন ও ফাঁকা স্থান বাদ দেওয়া
+function tocNormCmp($s) {
+    $s = tocKey($s);
+    $s = preg_replace('/\s+[০-৯0-9]+$/u', '', $s);
+    $s = preg_replace('/[\s\.\,\:\;\-\–\—\'\"‘’“”\(\)\[\]\/ঃ।?!]+/u', '', $s);
+    return $s;
+}
+
+// সূচির একটি শিরোনামের জন্য মূল লেখার অনুচ্ছেদ খোঁজা (৪ ধাপে)
+function findTocPara(&$paras, $key, $startIdx, $endIdx) {
+    $kn = tocNormCmp($key);
+    if (mb_strlen($kn) < 2) return -1;
+    // ধাপ ১: পূর্ণ মিল
+    for ($pi = $startIdx; $pi < $endIdx; $pi++) {
+        if ($paras[$pi]['len'] <= 120 && $paras[$pi]['cmp'] === $kn) return $pi;
+    }
+    // ধাপ ২: অনুচ্ছেদটি কী দিয়ে শুরু হয়েছে
+    if (mb_strlen($kn) >= 4) {
+        for ($pi = $startIdx; $pi < $endIdx; $pi++) {
+            if ($paras[$pi]['len'] <= 120 && mb_strpos($paras[$pi]['cmp'], $kn) === 0) return $pi;
+        }
+    }
+    // ধাপ ৩: কী-টি অনুচ্ছেদ দিয়ে শুরু হয়েছে
+    for ($pi = $startIdx; $pi < $endIdx; $pi++) {
+        $pn = $paras[$pi]['cmp'];
+        if ($paras[$pi]['len'] <= 100 && mb_strlen($pn) >= 5 && mb_strpos($kn, $pn) === 0) return $pi;
+    }
+    // ধাপ ৪: মূল শব্দগুলো (দার্শনিকদের vs দার্শনিকগণের ইত্যাদি)
+    $words = preg_split('/\s+/u', tocKey($key), -1, PREG_SPLIT_NO_EMPTY);
+    $sigWords = [];
+    foreach ($words as $w) {
+        if (mb_strlen($w) >= 3) $sigWords[] = mb_substr($w, 0, 4);
+    }
+    if (!empty($sigWords)) {
+        for ($pi = $startIdx; $pi < $endIdx; $pi++) {
+            if ($paras[$pi]['len'] > 100) continue;
+            $rawNorm = $paras[$pi]['rawNorm'];
+            $allOk = true;
+            foreach ($sigWords as $sw) {
+                if (mb_strpos($rawNorm, $sw) === false) { $allOk = false; break; }
+            }
+            if ($allOk) return $pi;
+        }
+    }
+    return -1;
+}
+
+// অধ্যায়ের শুরুতে নান্দনিক হেডিং ব্যানার ও উপশিরোনামে আইডি/ক্লাস বসানো
+function decorateChapterHeadings($html, $toc, $appendixToc = []) {
+    $html = (string)$html;
+    if ($html === '' || empty($toc)) return $html;
+
+    // বইয়ের শুরুর বাণী/প্রচ্ছদ বাদ দিয়ে 'সূচিপত্র'-এর পর থেকে খোঁজা
+    $scanFrom = 0;
+    $tocPos = strpos($html, 'সূচিপত্র');
+    if ($tocPos !== false) {
+        $endTocP = stripos($html, '</p>', $tocPos);
+        if ($endTocP !== false) $scanFrom = $endTocP + 4;
+    }
+
+    if (!preg_match_all('/<p\b[^>]*>.*?<\/p>/su', $html, $m, PREG_OFFSET_CAPTURE, $scanFrom)) {
+        return $html;
+    }
+
+    $paras = [];
+    foreach ($m[0] as $item) {
+        $pHtml = $item[0];
+        $pOff = $item[1];
+        $txt = html_entity_decode(strip_tags($pHtml), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $txt = trim(preg_replace('/\s+/u', ' ', $txt));
+        if ($txt === '') continue;
+        $paras[] = [
+            'off' => $pOff,
+            'tagEnd' => strpos($pHtml, '>') + 1,
+            'raw' => $txt,
+            'rawNorm' => normBnToc($txt),
+            'len' => mb_strlen($txt),
+            'cmp' => tocNormCmp($txt),
+        ];
+    }
+    $nParas = count($paras);
+    if ($nParas === 0) return $html;
+
+    // ধাপ ১: সব অধ্যায়ের সূচনা-অনুচ্ছেদ ক্রমানুসারে নির্ণয়
+    $chapPos = [];
+    $cur = 0;
+    foreach ($toc as $ci => $ch) {
         $subs = $ch['subs'] ?? [];
-        $anchor = !empty($subs) ? tocKey($subs[0]) : tocKey($ch['title']);
-        if ($anchor === '') continue;
-        $needle = htmlspecialchars($anchor, ENT_QUOTES, 'UTF-8');
-        $pos = mb_strpos($html, $needle);
-        if ($pos === false) continue;
-        $pStart = mb_strrpos(mb_substr($html, 0, $pos), '<p');
-        if ($pStart === false) continue;
-        $banner = '<h2 class="mw-chapter-title">' . htmlspecialchars($ch['title'], ENT_QUOTES, 'UTF-8') . '</h2>';
-        $html = mb_substr($html, 0, $pStart) . $banner . mb_substr($html, $pStart);
+        $anchor = !empty($subs) ? $subs[0] : $ch['title'];
+        $p = findTocPara($paras, $anchor, $cur, $nParas);
+        $chapPos[$ci] = $p;
+        if ($p >= 0) $cur = $p + 1;
+    }
+
+    // ইনসার্ট ও অ্যাট্রিবিউট পরিবর্তনের তালিকা (offset অনুযায়ী উল্টো ক্রমে প্রয়োগের জন্য)
+    $edits = []; // ['off' => byteOffset, 'text' => string]
+    $markedParas = [];
+
+    foreach ($toc as $ci => $ch) {
+        $cStart = $chapPos[$ci] ?? -1;
+        if ($cStart < 0) continue;
+        $cEnd = $nParas;
+        for ($nx = $ci + 1; $nx < count($toc); $nx++) {
+            if (($chapPos[$nx] ?? -1) >= 0) { $cEnd = $chapPos[$nx]; break; }
+        }
+
+        // অধ্যায়ের ব্যানার বসানো
+        $banner = '<h2 class="mw-chapter-title" id="toc-chap-' . $ci . '">' . htmlspecialchars($ch['title'], ENT_QUOTES, 'UTF-8') . '</h2>';
+        $edits[] = ['off' => $paras[$cStart]['off'], 'text' => $banner];
+
+        // অধ্যায়ের উপশিরোনামগুলো চিহ্নিত করা
+        $subCur = $cStart;
+        foreach (($ch['subs'] ?? []) as $si => $subTitle) {
+            $sp = findTocPara($paras, $subTitle, $subCur, $cEnd);
+            if ($sp < 0 && $subCur > $cStart) {
+                $sp = findTocPara($paras, $subTitle, $cStart, $cEnd);
+            }
+            if ($sp >= 0) {
+                if ($sp >= $subCur) $subCur = $sp + 1;
+                if (!isset($markedParas[$sp])) {
+                    $markedParas[$sp] = true;
+                    $insertAt = $paras[$sp]['off'] + $paras[$sp]['tagEnd'] - 1;
+                    $edits[] = ['off' => $insertAt, 'text' => ' id="toc-sub-' . $ci . '-' . $si . '" class="mw-sub-title"'];
+                }
+            }
+        }
+    }
+
+    // পরিশিষ্ট শিরোনামসমূহ চিহ্নিত করা
+    if (!empty($appendixToc)) {
+        $lastChapPos = 0;
+        for ($k = count($toc) - 1; $k >= 0; $k--) {
+            if (($chapPos[$k] ?? -1) >= 0) { $lastChapPos = $chapPos[$k]; break; }
+        }
+        $appCur = $lastChapPos;
+        foreach ($appendixToc as $ai => $appTitle) {
+            $ap = findTocPara($paras, $appTitle, $appCur, $nParas);
+            if ($ap >= 0) {
+                $appCur = $ap + 1;
+                if (!isset($markedParas[$ap])) {
+                    $markedParas[$ap] = true;
+                    $insertAt = $paras[$ap]['off'] + $paras[$ap]['tagEnd'] - 1;
+                    $edits[] = ['off' => $insertAt, 'text' => ' id="toc-app-' . $ai . '" class="mw-sub-title"'];
+                }
+            }
+        }
+    }
+
+    // শেষ থেকে শুরুতে পরিবর্তন প্রয়োগ
+    usort($edits, function ($a, $b) { return $b['off'] <=> $a['off']; });
+    foreach ($edits as $ed) {
+        $html = substr($html, 0, $ed['off']) . $ed['text'] . substr($html, $ed['off']);
     }
     return $html;
 }
 
 // সূচিপত্রের শিরোনাম থেকে লেখার ভেতরে খোঁজার উপযোগী কী
 function tocKey($t) {
-    $t = preg_replace('/^\s*[০-৯0-9]+\s*[\.\)]\s*/u', '', (string)$t);
+    $t = normBnToc($t);
+    $t = preg_replace('/^\s*[০-৯0-9]+(?:\/[০-৯0-9]+)?\s*[\.\)]\s*/u', '', $t);
+    $t = preg_replace('/^\s*[০-৯0-9]+\s+(?=[^\s০-৯0-9])/u', '', $t);
     $t = str_replace("\t", ' ', $t);
     $t = preg_replace('/\s+/u', ' ', $t);
     $p = mb_strpos($t, ' (');
     if ($p !== false && $p >= 3) $t = mb_substr($t, 0, $p);
+    $p2 = mb_strpos($t, '/');
+    if ($p2 !== false && $p2 >= 3) $t = mb_substr($t, 0, $p2);
     return trim($t);
 }
 
@@ -828,38 +1014,7 @@ function extractBookNotes($plain, $book = []) {
 }
 $bookNotes = extractBookNotes($fullAccess ? $plainFull : $bodyHtml, $book);
 
-// সূচির নিচের পরিশিষ্ট শিরোনামসমূহ (বইয়ে থাকলে বাম পাশের সূচিতে যুক্ত হবে)
-$appendixCandidates = [
-    'ব্যবহৃত সঙ্কেতাদি',
-    'পৌরাণিক ৪০ মূলক সংখ্যার সারণী',
-    'শ্বরবিজ্ঞান বিষয়ক শব্দসংক্ষেপ',
-    'ব্যাকরণ বিষয়ক শব্দসংক্ষেপ',
-    'ভাষা বিষয়ক শব্দসংক্ষেপ',
-    'বিষয় বিষয়ক শব্দসংক্ষেপ',
-    'আরবি, ফার্সি, উর্দু ও হিন্দি ভাষার লিপ্যন্তর নিয়মাবলী',
-    'লিপ্যন্তর- ১',
-    'লিপ্যন্তর- ২',
-    'প্রামাণ্য গ্রন্থপঞ্জি',
-    'অন্যান্য গ্রন্থাদি',
-    'কাঁই পরিবারের প্রামাণ্য গ্রন্থপঞ্জি (সন্নিবদ্ধ চলমান)',
-    'কাঁই পরিবারের প্রকাশিত গ্রন্থসমূহ',
-    'বলন বিষয়ক গ্রন্থ',
-    'লালন বিষয়ক গ্রন্থ',
-    'বৈদিক সঙ্কেত',
-];
-$appendixToc = [];
-if ($plain0 !== '') {
-    $normBn = function ($s) {
-        if (class_exists('Normalizer')) $s = Normalizer::normalize($s, Normalizer::FORM_C);
-        return str_replace(["\xE0\xA6\xAF\xE0\xA6\xBC", "\xE0\xA6\xA1\xE0\xA6\xBC", "\xE0\xA6\xA2\xE0\xA6\xBC"], ["\xE0\xA7\x9F", "\xE0\xA7\x9C", "\xE0\xA7\x9D"], $s);
-    };
-    $plain0Norm = $normBn($plain0);
-    foreach ($appendixCandidates as $cand) {
-        if (mb_strpos($plain0Norm, $normBn(tocKey($cand))) !== false) {
-            $appendixToc[] = $cand;
-        }
-    }
-}
+// পরিশিষ্ট শিরোনামসমূহ পূর্বেই $appendixToc-এ সংগৃহীত হয়েছে
 
 // বইয়ের ভেতরে সার্চের জন্য অধ্যায়ের লেখা (অ্যাক্সেস অনুযায়ী সীমিত)
 $searchChapters = [];
@@ -902,7 +1057,7 @@ if ($fullAccess) {
             --wp-sidebar-w: clamp(210px, 20vw, 250px);
         }
         * { box-sizing: border-box; }
-        html { scroll-behavior: smooth; width: 100%; max-width: 100%; overflow-x: clip; }
+        html { scroll-behavior: smooth; scroll-padding-top: calc(var(--mw-topbar-h, 96px) + 16px); width: 100%; max-width: 100%; overflow-x: clip; }
         body {
             margin: 0;
             width: 100%;
@@ -1060,6 +1215,116 @@ if ($fullAccess) {
             background: var(--wp-bg); color: var(--wp-ink); font-size: 13px; font-family: inherit;
         }
         .mw-color { width: 34px; height: 30px; padding: 0; border: 1px solid #cbd5e1; border-radius: 7px; background: none; cursor: pointer; }
+
+        /* ---------- ফুল এডিটর টুলবার ---------- */
+        .mw-editor-toolbar {
+            position: sticky;
+            top: var(--mw-topbar-only-h, 52px);
+            z-index: 14;
+            background: rgba(248, 250, 252, .96);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom: 1px solid #cbd5e1;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, .05);
+            padding: 8px clamp(12px, 2.5vw, 28px);
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+        }
+        .mw-editor-toolbar.is-editing {
+            background: rgba(255, 255, 255, .98);
+            border-bottom-color: var(--accent);
+        }
+        .mw-tb-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .mw-tb-sep {
+            width: 1px;
+            height: 28px;
+            background: #cbd5e1;
+            margin: 0 4px;
+        }
+        .mw-tb-btn {
+            min-width: 38px;
+            height: 38px;
+            padding: 0 9px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--wp-ink);
+            font-size: 16px;
+            line-height: 1;
+            cursor: pointer;
+            font-family: inherit;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            transition: background-color .14s, border-color .14s, color .14s;
+        }
+        .mw-tb-btn:hover {
+            background: #e2e8f0;
+            border-color: #cbd5e1;
+        }
+        .mw-tb-btn.active {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+        .mw-tb-select {
+            height: 38px;
+            padding: 0 9px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            background: var(--wp-bg);
+            color: var(--wp-ink);
+            font-size: 15.5px;
+            font-family: inherit;
+            cursor: pointer;
+        }
+        .mw-tb-color-btn {
+            position: relative;
+            min-width: 43px;
+            height: 38px;
+            padding: 0 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            background: var(--wp-bg);
+            color: var(--wp-ink);
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            line-height: 1.05;
+            overflow: hidden;
+        }
+        .mw-tb-color-btn:hover {
+            background: #f1f5f9;
+            border-color: #94a3b8;
+        }
+        .mw-tb-color-bar {
+            width: 23px;
+            height: 4px;
+            border-radius: 2px;
+            margin-top: 2.5px;
+        }
+        .mw-tb-color-btn input[type="color"] {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+            border: 0;
+            padding: 0;
+        }
 
         .mw-content-wrap { padding: clamp(12px, 1.8vw, 22px) clamp(12px, 1.8vw, 20px) clamp(20px, 2.5vw, 32px); width: 100%; max-width: 100%; margin: 0 auto; }
         .mw-paypanel { width: calc(100% - clamp(24px, 4vw, 48px)); max-width: 100%; margin: 16px auto 0; padding: 16px 20px; border: 1px solid var(--wp-border); border-left: 5px solid var(--accent); background: var(--wp-bg-soft); border-radius: 6px; }
@@ -1259,7 +1524,7 @@ if ($fullAccess) {
             background: #e0e7ff; color: #3730a3; border-color: #a5b4fc;
         }
         .mw-inline-note-label {
-            scroll-margin-top: 4.5rem;
+            scroll-margin-top: calc(var(--mw-topbar-h, 96px) + 16px);
         }
         .mw-note-heading {
             font-size: .8rem; font-weight: 700; color: #0f172a; line-height: 1.3;
@@ -1460,7 +1725,7 @@ if ($fullAccess) {
         .mw-body { font-size: 14pt; font-family: var(--font-book); }
         .mw-body h1, .mw-body h2, .mw-body h3, .mw-body h4 {
             font-family: var(--font-book);
-            font-weight: 400; line-height: 1.3; margin: 1.6rem 0 .6rem; scroll-margin-top: 4rem; text-align: left;
+            font-weight: 400; line-height: 1.3; margin: 1.6rem 0 .6rem; scroll-margin-top: calc(var(--mw-topbar-h, 96px) + 16px); text-align: left;
             overflow: hidden;
         }
         .mw-body h2 { font-size: 1.5rem; border-bottom: 1px solid var(--wp-border-soft); padding-bottom: .25rem; }
@@ -1470,10 +1735,17 @@ if ($fullAccess) {
             padding: .8rem 1rem; border: 0;
             border-top: 3px double var(--accent); border-bottom: 3px double var(--accent);
             background: var(--wp-bg-soft); letter-spacing: .02em; line-height: 1.35;
+            scroll-margin-top: calc(var(--mw-topbar-h, 96px) + 16px);
         }
         .mw-body h2.mw-chapter-title::before { content: "\2766"; display: block; font-size: 1.4rem; margin-bottom: .3rem; color: var(--accent); }
+        .mw-body p.mw-sub-title {
+            font-size: 1.22rem; font-weight: 700; color: var(--accent);
+            margin: 1.5rem 0 .65rem; padding-bottom: .25rem;
+            border-bottom: 1px solid var(--wp-border-soft);
+            line-height: 1.35; scroll-margin-top: calc(var(--mw-topbar-h, 96px) + 16px);
+        }
         .mw-body h3 { font-size: 1.22rem; }
-        .mw-body p { margin: 0 0 .5rem; line-height: 1.6; scroll-margin-top: 4rem; text-align: justify; }
+        .mw-body p { margin: 0 0 .5rem; line-height: 1.6; scroll-margin-top: calc(var(--mw-topbar-h, 96px) + 16px); text-align: justify; }
         .mw-body ul, .mw-body ol { margin: 0 0 1rem; padding-left: 1.6rem; line-height: 1.6; }
         .mw-body a { color: var(--wp-link); }
         .mw-body a:visited { color: var(--wp-link-visited); }
@@ -1503,7 +1775,7 @@ if ($fullAccess) {
         }
         @media print {
             .mw-app { display: block; }
-            .mw-sidebar, .mw-topbar, .mw-menu-btn { display: none !important; }
+            .mw-sidebar, .mw-topbar, .mw-editor-toolbar, .mw-menu-btn { display: none !important; }
             .mw-main { margin-left: 0; }
             .mw-article { display: block; border: 0; box-shadow: none; padding: 0; }
             .mw-infobox { float: none; width: 100%; height: auto; margin: 0 0 1.2rem 0; }
@@ -1758,12 +2030,12 @@ if ($fullAccess) {
                     <li class="mw-toc-chapter <?= $ci === 0 ? '' : 'collapsed' ?>">
                         <div class="mw-toc-row">
                             <button type="button" class="mw-caret" onclick="toggleSub(this)" aria-label="টগল"><?= $ci === 0 ? '▼' : '▸' ?></button>
-                            <a href="#mwBody" class="mw-toc-link" data-key="<?= htmlspecialchars(tocKey($ch['title'])) ?>" data-firstsub="<?= htmlspecialchars(tocKey($ch['subs'][0] ?? $ch['title'])) ?>" onclick="return scrollToToc(this)"><?= htmlspecialchars($ch['title']) ?></a>
+                            <a href="#toc-chap-<?= $ci ?>" class="mw-toc-link" data-target="toc-chap-<?= $ci ?>" data-key="<?= htmlspecialchars(tocKey($ch['title'])) ?>" data-firstsub="<?= htmlspecialchars(tocKey($ch['subs'][0] ?? $ch['title'])) ?>" onclick="return scrollToToc(this)"><?= htmlspecialchars($ch['title']) ?></a>
                         </div>
                         <?php if (!empty($ch['subs'])): ?>
                             <ul class="mw-sublist">
                                 <?php foreach ($ch['subs'] as $si => $sh): ?>
-                                    <li><a href="#mwBody" data-key="<?= htmlspecialchars(tocKey($sh)) ?>" onclick="return scrollToToc(this)"><?= htmlspecialchars($sh) ?></a></li>
+                                    <li><a href="#toc-sub-<?= $ci ?>-<?= $si ?>" data-target="toc-sub-<?= $ci ?>-<?= $si ?>" data-key="<?= htmlspecialchars(tocKey($sh)) ?>" onclick="return scrollToToc(this)"><?= htmlspecialchars($sh) ?></a></li>
                                 <?php endforeach; ?>
                             </ul>
                         <?php endif; ?>
@@ -1775,9 +2047,9 @@ if ($fullAccess) {
                 <?php endforeach; ?>
             <?php endif; ?>
             <?php if (!empty($appendixToc)): ?>
-                <?php foreach ($appendixToc as $appTitle): ?>
+                <?php foreach ($appendixToc as $ai => $appTitle): ?>
                     <li class="mw-toc-appendix-item">
-                        <a href="#mwBody" class="mw-toc-link mw-toc-appendix" data-appendix="1" data-key="<?= htmlspecialchars(tocKey($appTitle)) ?>" onclick="return scrollToToc(this)"><?= htmlspecialchars($appTitle) ?></a>
+                        <a href="#toc-app-<?= $ai ?>" class="mw-toc-link mw-toc-appendix" data-target="toc-app-<?= $ai ?>" data-appendix="1" data-key="<?= htmlspecialchars(tocKey($appTitle)) ?>" onclick="return scrollToToc(this)"><?= htmlspecialchars($appTitle) ?></a>
                     </li>
                 <?php endforeach; ?>
             <?php endif; ?>
@@ -1853,11 +2125,6 @@ if ($fullAccess) {
         </div>
 
         <?php if (!$isPublicView): ?>
-        <button type="button" class="mw-tool" onclick="document.execCommand('bold')"><b>B</b></button>
-        <button type="button" class="mw-tool" onclick="document.execCommand('italic')"><i>I</i></button>
-        <button type="button" class="mw-tool" onclick="document.execCommand('underline')"><u>U</u></button>
-        <input type="color" class="mw-color" onchange="document.execCommand('foreColor', false, this.value)" title="লেখার রঙ">
-
         <button type="button" class="mw-tool primary" onclick="savePage()">💾 সেভ করুন</button>
         <?php endif; ?>
         <button type="button" class="mw-tool" onclick="window.print()">🖨️ প্রিন্ট / PDF</button>
@@ -1875,6 +2142,99 @@ if ($fullAccess) {
         <?php endif; ?>
         <?php endif; ?>
     </div>
+
+    <?php if (!$isPublicView): ?>
+    <div class="mw-editor-toolbar" id="mwEditorToolbar" role="toolbar" aria-label="সম্পাদনা টুলবার">
+        <div class="mw-tb-group">
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="execEd('undo')" title="পূর্বাবস্থা (Ctrl+Z)">↶</button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="execEd('redo')" title="পুনরায় (Ctrl+Y)">↷</button>
+        </div>
+        <span class="mw-tb-sep"></span>
+
+        <div class="mw-tb-group">
+            <select class="mw-tb-select" id="edFormatBlock" onchange="execEdBlock(this.value)" title="শিরোনাম ও অনুচ্ছেদ">
+                <option value="p">সাধারণ লেখা</option>
+                <option value="h1">শিরোনাম ১ (H1)</option>
+                <option value="h2">শিরোনাম ২ (H2)</option>
+                <option value="h3">শিরোনাম ৩ (H3)</option>
+                <option value="h4">শিরোনাম ৪ (H4)</option>
+                <option value="blockquote">উদ্ধৃতি</option>
+                <option value="pre">কোড ব্লক</option>
+            </select>
+
+            <select class="mw-tb-select" id="edFontSize" onchange="applyFontSize(this.value)" title="অক্ষরের আকার">
+                <option value="">আকার</option>
+                <option value="12">12 px</option>
+                <option value="14">14 px</option>
+                <option value="16">16 px</option>
+                <option value="18">18 px</option>
+                <option value="20">20 px</option>
+                <option value="22">22 px</option>
+                <option value="24">24 px</option>
+                <option value="28">28 px</option>
+                <option value="32">32 px</option>
+                <option value="36">36 px</option>
+                <option value="42">42 px</option>
+                <option value="48">48 px</option>
+                <option value="60">60 px</option>
+                <option value="72">72 px</option>
+            </select>
+
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="stepFontSize(2)" title="অক্ষর বড় করুন"><b>অ+</b></button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="stepFontSize(-2)" title="অক্ষর ছোট করুন">অ-</button>
+        </div>
+        <span class="mw-tb-sep"></span>
+
+        <div class="mw-tb-group">
+            <button type="button" class="mw-tb-btn" data-cmd="bold" onmousedown="event.preventDefault()" onclick="execEd('bold')" title="মোটা (Ctrl+B)"><b>B</b></button>
+            <button type="button" class="mw-tb-btn" data-cmd="italic" onmousedown="event.preventDefault()" onclick="execEd('italic')" title="বাঁকা (Ctrl+I)"><i>I</i></button>
+            <button type="button" class="mw-tb-btn" data-cmd="underline" onmousedown="event.preventDefault()" onclick="execEd('underline')" title="নিচে দাগ (Ctrl+U)"><u>U</u></button>
+            <button type="button" class="mw-tb-btn" data-cmd="strikeThrough" onmousedown="event.preventDefault()" onclick="execEd('strikeThrough')" title="কাটা দাগ"><s>S</s></button>
+            <button type="button" class="mw-tb-btn" data-cmd="subscript" onmousedown="event.preventDefault()" onclick="execEd('subscript')" title="সাবস্ক্রিপ্ট">X<sub>2</sub></button>
+            <button type="button" class="mw-tb-btn" data-cmd="superscript" onmousedown="event.preventDefault()" onclick="execEd('superscript')" title="সুপারস্ক্রিপ্ট">X<sup>2</sup></button>
+        </div>
+        <span class="mw-tb-sep"></span>
+
+        <div class="mw-tb-group">
+            <label class="mw-tb-color-btn" title="লেখার রঙ">
+                <span>A</span>
+                <span class="mw-tb-color-bar" id="edForeColorBar" style="background:#0f172a;"></span>
+                <input type="color" id="edForeColor" value="#0f172a" oninput="applyTextColor(this.value)" onchange="applyTextColor(this.value)">
+            </label>
+            <label class="mw-tb-color-btn" title="হাইলাইট / ব্যাকগ্রাউন্ড রঙ">
+                <span>🖍</span>
+                <span class="mw-tb-color-bar" id="edBackColorBar" style="background:#fef08a;"></span>
+                <input type="color" id="edBackColor" value="#fef08a" oninput="applyBackColor(this.value)" onchange="applyBackColor(this.value)">
+            </label>
+        </div>
+        <span class="mw-tb-sep"></span>
+
+        <div class="mw-tb-group">
+            <button type="button" class="mw-tb-btn" data-cmd="justifyLeft" onmousedown="event.preventDefault()" onclick="execEd('justifyLeft')" title="বামে সাজান">⫷</button>
+            <button type="button" class="mw-tb-btn" data-cmd="justifyCenter" onmousedown="event.preventDefault()" onclick="execEd('justifyCenter')" title="মাঝখানে সাজান">⫸</button>
+            <button type="button" class="mw-tb-btn" data-cmd="justifyRight" onmousedown="event.preventDefault()" onclick="execEd('justifyRight')" title="ডানে সাজান">⫹</button>
+            <button type="button" class="mw-tb-btn" data-cmd="justifyFull" onmousedown="event.preventDefault()" onclick="execEd('justifyFull')" title="উভয় দিকে সমান">☰</button>
+        </div>
+        <span class="mw-tb-sep"></span>
+
+        <div class="mw-tb-group">
+            <button type="button" class="mw-tb-btn" data-cmd="insertUnorderedList" onmousedown="event.preventDefault()" onclick="execEd('insertUnorderedList')" title="বুলেট তালিকা">•≡</button>
+            <button type="button" class="mw-tb-btn" data-cmd="insertOrderedList" onmousedown="event.preventDefault()" onclick="execEd('insertOrderedList')" title="নম্বর তালিকা">1≡</button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="execEd('outdent')" title="ইন্ডেন্ট কমান">⇤</button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="execEd('indent')" title="ইন্ডেন্ট বাড়ান">⇥</button>
+        </div>
+        <span class="mw-tb-sep"></span>
+
+        <div class="mw-tb-group">
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="insertEdLink()" title="লিংক যুক্ত করুন">🔗</button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="execEd('unlink')" title="লিংক সরান">⛓️‍💥</button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="insertEdImage()" title="ছবি যুক্ত করুন">🖼️</button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="insertEdTable()" title="টেবিল যুক্ত করুন">⊞</button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="execEd('insertHorizontalRule')" title="অনুভূমিক রেখা">―</button>
+            <button type="button" class="mw-tb-btn" onmousedown="event.preventDefault()" onclick="execEd('removeFormat')" title="ফরম্যাটিং মুছুন">🧹</button>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <?php if (!$fullAccess): ?>
     <div class="mw-paypanel">
@@ -2396,17 +2756,69 @@ function closeMobileSidebar() {
     if (sb) sb.classList.remove('open');
 }
 
+function syncTopbarHeight() {
+    var topbar = document.querySelector('.mw-topbar');
+    if (!topbar) return;
+    var topH = Math.ceil(topbar.getBoundingClientRect().height);
+    if (topH > 0) document.documentElement.style.setProperty('--mw-topbar-only-h', topH + 'px');
+    var edBar = document.getElementById('mwEditorToolbar');
+    var edH = (edBar && edBar.offsetParent !== null) ? Math.ceil(edBar.getBoundingClientRect().height) : 0;
+    var totalH = topH + edH;
+    if (totalH > 0) document.documentElement.style.setProperty('--mw-topbar-h', totalH + 'px');
+}
+
+function scrollTargetBelowTopbar(target) {
+    if (!target) return;
+    syncTopbarHeight();
+    var topbar = document.querySelector('.mw-topbar');
+    var edBar = document.getElementById('mwEditorToolbar');
+    var topbarH = (topbar ? topbar.getBoundingClientRect().height : 0) +
+        (edBar && edBar.offsetParent !== null ? edBar.getBoundingClientRect().height : 0);
+    var rect = target.getBoundingClientRect();
+    var y = window.pageYOffset + rect.top - topbarH - 16;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+}
+
 function scrollToToc(el) {
     closeMobileSidebar();
+    document.querySelectorAll('.mw-toc-list a.active').forEach(function (a) { a.classList.remove('active'); });
+    el.classList.add('active');
+    var chapLi = el.closest('.mw-toc-chapter');
+    if (chapLi && chapLi.classList.contains('collapsed')) {
+        chapLi.classList.remove('collapsed');
+        var caret = chapLi.querySelector('.mw-caret');
+        if (caret) caret.textContent = '▼';
+    }
+    var targetId = (el.getAttribute('data-target') || '').trim();
+    if (targetId) {
+        var byId = document.getElementById(targetId);
+        if (byId) {
+            scrollTargetBelowTopbar(byId);
+            return false;
+        }
+    }
     var key = (el.getAttribute('data-key') || '').trim();
     if (!key) return true;
     var target = tocTargets[key];
     if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        scrollTargetBelowTopbar(target);
         return false;
     }
     return true;
 }
+
+document.addEventListener('DOMContentLoaded', function () {
+    syncTopbarHeight();
+    var topbar = document.querySelector('.mw-topbar');
+    var edBar = document.getElementById('mwEditorToolbar');
+    if (typeof ResizeObserver !== 'undefined') {
+        var ro = new ResizeObserver(syncTopbarHeight);
+        if (topbar) ro.observe(topbar);
+        if (edBar) ro.observe(edBar);
+    }
+});
+window.addEventListener('resize', syncTopbarHeight);
+window.addEventListener('load', syncTopbarHeight);
 
 document.addEventListener('click', function (e) {
     var sb = document.getElementById('mwSidebar');
@@ -2425,11 +2837,234 @@ function setEditMode(on, btn) {
         bodyEl.setAttribute('contenteditable', on ? 'true' : 'false');
         if (!on) bodyEl.style.cursor = '';
     }
+    var edBar = document.getElementById('mwEditorToolbar');
+    if (edBar) edBar.classList.toggle('is-editing', !!on);
     var guide = document.getElementById('mwColResizeGuide');
     if (!on && guide) guide.style.display = 'none';
     document.querySelectorAll('.mw-tab').forEach(function (t) { t.classList.remove('active'); });
     if (btn) btn.classList.add('active');
 }
+
+/* ---------- ফুল এডিটর টুলবার লজিক ---------- */
+var _savedEdRange = null;
+
+function isNodeInEditor(node) {
+    var bodyEl = document.getElementById('editableContent');
+    var titleEl = document.getElementById('editableTitle');
+    if (!node) return false;
+    return (bodyEl && bodyEl.contains(node)) || (titleEl && titleEl.contains(node));
+}
+
+function saveEditorSelection() {
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    var range = sel.getRangeAt(0);
+    if (isNodeInEditor(range.commonAncestorContainer)) {
+        _savedEdRange = range.cloneRange();
+    }
+}
+
+function restoreEditorSelection() {
+    var bodyEl = document.getElementById('editableContent');
+    if (_savedEdRange) {
+        var sel = window.getSelection();
+        if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(_savedEdRange);
+        }
+    } else if (bodyEl) {
+        bodyEl.focus();
+    }
+}
+
+function ensureEditMode() {
+    var bodyEl = document.getElementById('editableContent');
+    if (!bodyEl) return false;
+    if (bodyEl.getAttribute('contenteditable') !== 'true') {
+        var editTab = document.querySelector('.mw-tab[onclick*="setEditMode(true"]');
+        setEditMode(true, editTab);
+    }
+    restoreEditorSelection();
+    return true;
+}
+
+function execEd(cmd, value) {
+    if (!ensureEditMode()) return;
+    document.execCommand('styleWithCSS', false, true);
+    document.execCommand(cmd, false, value !== undefined ? value : null);
+    window._mwDirty = true;
+    saveEditorSelection();
+    updateToolbarState();
+}
+
+function execEdBlock(tag) {
+    if (!tag || !ensureEditMode()) return;
+    document.execCommand('formatBlock', false, '<' + tag + '>');
+    window._mwDirty = true;
+    saveEditorSelection();
+    updateToolbarState();
+}
+
+function applyFontSize(px) {
+    px = parseInt(px, 10);
+    if (!px || isNaN(px) || !ensureEditMode()) return;
+    var sel = window.getSelection();
+    var bodyEl = document.getElementById('editableContent');
+    if (!sel || !bodyEl) return;
+
+    if (sel.isCollapsed) {
+        var span = document.createElement('span');
+        span.style.fontSize = px + 'px';
+        span.appendChild(document.createTextNode('\u200B'));
+        var range = sel.getRangeAt(0);
+        range.insertNode(span);
+        range.setStart(span.firstChild, 1);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    } else {
+        document.execCommand('styleWithCSS', false, false);
+        document.execCommand('fontSize', false, '7');
+        var fonts = bodyEl.querySelectorAll('font[size="7"]');
+        var lastEl = null;
+        fonts.forEach(function (f) {
+            var sp = document.createElement('span');
+            sp.style.fontSize = px + 'px';
+            while (f.firstChild) sp.appendChild(f.firstChild);
+            f.parentNode.replaceChild(sp, f);
+            lastEl = sp;
+        });
+        if (lastEl) {
+            var r = document.createRange();
+            r.selectNodeContents(lastEl);
+            sel.removeAllRanges();
+            sel.addRange(r);
+        }
+    }
+    var sizeSel = document.getElementById('edFontSize');
+    if (sizeSel) {
+        var opt = sizeSel.querySelector('option[value="' + px + '"]');
+        sizeSel.value = opt ? String(px) : '';
+    }
+    window._mwDirty = true;
+    saveEditorSelection();
+}
+
+function getCurrentSelectionFontSize() {
+    var sel = window.getSelection();
+    var node = sel && sel.anchorNode ? sel.anchorNode : null;
+    if (node && node.nodeType === 3) node = node.parentNode;
+    if (node && node.nodeType === 1 && isNodeInEditor(node)) {
+        var fs = parseFloat(window.getComputedStyle(node).fontSize);
+        if (!isNaN(fs) && fs > 0) return Math.round(fs);
+    }
+    return 18;
+}
+
+function stepFontSize(delta) {
+    if (!ensureEditMode()) return;
+    var cur = getCurrentSelectionFontSize();
+    var next = Math.max(10, Math.min(72, cur + delta));
+    applyFontSize(next);
+}
+
+function applyTextColor(color) {
+    var bar = document.getElementById('edForeColorBar');
+    if (bar) bar.style.background = color;
+    execEd('foreColor', color);
+}
+
+function applyBackColor(color) {
+    var bar = document.getElementById('edBackColorBar');
+    if (bar) bar.style.background = color;
+    if (!ensureEditMode()) return;
+    document.execCommand('styleWithCSS', false, true);
+    if (!document.execCommand('hiliteColor', false, color)) {
+        document.execCommand('backColor', false, color);
+    }
+    window._mwDirty = true;
+    saveEditorSelection();
+}
+
+function insertEdLink() {
+    if (!ensureEditMode()) return;
+    var url = window.prompt('লিংকের URL লিখুন (যেমন: https://example.com):', 'https://');
+    if (!url || url === 'https://') return;
+    restoreEditorSelection();
+    document.execCommand('createLink', false, url);
+    window._mwDirty = true;
+    saveEditorSelection();
+}
+
+function insertEdImage() {
+    if (!ensureEditMode()) return;
+    var url = window.prompt('ছবির URL লিখুন:', '');
+    if (!url) return;
+    restoreEditorSelection();
+    document.execCommand('insertImage', false, url);
+    window._mwDirty = true;
+    saveEditorSelection();
+}
+
+function insertEdTable() {
+    if (!ensureEditMode()) return;
+    var rows = parseInt(window.prompt('কতটি সারি (Rows)?', '3'), 10);
+    var cols = parseInt(window.prompt('কতটি কলাম (Columns)?', '3'), 10);
+    if (!rows || !cols || rows < 1 || cols < 1) return;
+    rows = Math.min(rows, 20);
+    cols = Math.min(cols, 12);
+    var html = '<table style="width:100%; border-collapse:collapse; margin:12px 0;"><tbody>';
+    for (var r = 0; r < rows; r++) {
+        html += '<tr>';
+        for (var c = 0; c < cols; c++) {
+            var tag = r === 0 ? 'th' : 'td';
+            html += '<' + tag + ' style="border:1px solid #cbd5e1; padding:6px 10px;">' + (r === 0 ? 'শিরোনাম' : 'তথ্য') + '</' + tag + '>';
+        }
+        html += '</tr>';
+    }
+    html += '</tbody></table><p><br></p>';
+    restoreEditorSelection();
+    document.execCommand('insertHTML', false, html);
+    window._mwDirty = true;
+    saveEditorSelection();
+}
+
+function updateToolbarState() {
+    var edBar = document.getElementById('mwEditorToolbar');
+    if (!edBar) return;
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !isNodeInEditor(sel.anchorNode)) return;
+
+    edBar.querySelectorAll('.mw-tb-btn[data-cmd]').forEach(function (btn) {
+        var cmd = btn.getAttribute('data-cmd');
+        try {
+            btn.classList.toggle('active', !!document.queryCommandState(cmd));
+        } catch (e) {}
+    });
+
+    var blockSel = document.getElementById('edFormatBlock');
+    if (blockSel) {
+        try {
+            var blk = (document.queryCommandValue('formatBlock') || '').toLowerCase().replace(/[<>]/g, '');
+            if (blockSel.querySelector('option[value="' + blk + '"]')) {
+                blockSel.value = blk;
+            } else {
+                blockSel.value = 'p';
+            }
+        } catch (e) {}
+    }
+
+    var sizeSel = document.getElementById('edFontSize');
+    if (sizeSel) {
+        var curSize = getCurrentSelectionFontSize();
+        sizeSel.value = sizeSel.querySelector('option[value="' + curSize + '"]') ? String(curSize) : '';
+    }
+}
+
+document.addEventListener('selectionchange', function () {
+    saveEditorSelection();
+    updateToolbarState();
+});
 
 window._mwDirty = false;
 (function () {
