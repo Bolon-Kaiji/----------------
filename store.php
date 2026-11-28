@@ -49,9 +49,21 @@ function loadChapters($id) {
     return is_array($ch) ? $ch : [];
 }
 
+function storeClearCache($id) {
+    $safeId = preg_replace('/[^A-Za-z0-9_]/', '', (string)$id);
+    if ($safeId === '' || !is_dir(BOOKS_DATA_DIR)) return;
+    foreach (glob(BOOKS_DATA_DIR . '/' . $safeId . '_render_*') ?: [] as $f) {
+        @unlink($f);
+    }
+    foreach (glob(BOOKS_DATA_DIR . '/' . $safeId . '_search_*') ?: [] as $f) {
+        @unlink($f);
+    }
+}
+
 function saveChapters($id, $chapters) {
     storeInit();
     storeWrite(storeChaptersFile($id), array_values($chapters));
+    storeClearCache($id);
 }
 
 // নতুন বই যোগ: তথ্য index-এ, লেখা আলাদা ফাইলে

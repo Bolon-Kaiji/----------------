@@ -1,5 +1,8 @@
 <?php
 session_start();
+if (!isset($_GET['download']) && extension_loaded('zlib') && !ini_get('zlib.output_compression')) {
+    @ob_start('ob_gzhandler');
+}
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/store.php';
 
@@ -21,7 +24,13 @@ if (!isset($books[$id])) {
 }
 
 $book = $books[$id];
-$chapters = loadChapters($id);
+$chapters = null;
+$getChapters = function () use ($id, &$chapters) {
+    if ($chapters === null) {
+        $chapters = loadChapters($id);
+    }
+    return $chapters;
+};
 
 // ---- পেমেন্ট ও অ্যাকসেস (সব ধরণের সংগ্রহ) ----
 require_once __DIR__ . '/pay.php';
@@ -79,12 +88,53 @@ $fullAccess = $paidFraction >= 1.0;
 $isLocalDev = in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true);
 if ($isLocalDev) $fullAccess = true;
 
-// আনুমানিক পাঠকাল (মিনিট)
-$wordCountEst = count(preg_split('/\s+/u', trim(strip_tags($chapters[$chapIdx]['plain'] ?? $chapters[$chapIdx]['content'] ?? '')), -1, PREG_SPLIT_NO_EMPTY));
-$readMinutes = max(1, (int)ceil($wordCountEst / 180));
+// AJAX: বইয়ের ভেতরে সার্চের জন্য অধ্যায়ের লেখা (অন-ডিমান্ড লোড)
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'search_data') {
+    header('Content-Type: application/json; charset=UTF-8');
+    $safeId = preg_replace('/[^A-Za-z0-9_]/', '', $id);
+    $srcFile = storeChaptersFile($id);
+    $srcMtime = file_exists($srcFile) ? (int)filemtime($srcFile) : 0;
+    $searchCacheFile = BOOKS_DATA_DIR . '/' . $safeId . '_search_f1.json';
+    if ($fullAccess && file_exists($searchCacheFile) && (int)filemtime($searchCacheFile) >= $srcMtime) {
+        readfile($searchCacheFile);
+        exit;
+    }
+    $chapters = $getChapters();
+    $searchChapters = [];
+    if ($fullAccess) {
+        foreach ($chapters as $ci => $ch) {
+            $searchChapters[] = [
+                'idx' => $ci,
+                'title' => $ch['title'],
+                'plain' => $ch['plain'] ?? strip_tags($ch['content'] ?? ''),
+            ];
+        }
+        $json = json_encode($searchChapters, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($json !== false) {
+            storeInit();
+            $tmp = $searchCacheFile . '.tmp';
+            if (file_put_contents($tmp, $json, LOCK_EX) !== false) {
+                @rename($tmp, $searchCacheFile);
+            }
+        }
+        echo $json;
+    } else {
+        $curCh = $chapters[$chapIdx] ?? ($chapters[0] ?? ['title' => $book['title'] ?? 'প্রথম অধ্যায়', 'content' => '', 'plain' => '']);
+        $pf = $curCh['plain'] ?? strip_tags($curCh['content'] ?? '');
+        $showLen = (int)floor(mb_strlen($pf) * $paidFraction);
+        $searchChapters[] = [
+            'idx' => $chapIdx,
+            'title' => $curCh['title'],
+            'plain' => mb_substr($pf, 0, $showLen),
+        ];
+        echo json_encode($searchChapters, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+    exit;
+}
 
 // ডাউনলোড (আনলক করা অংশ পর্যন্ত)
 if (isset($_GET['download'])) {
+    $chapters = $getChapters();
     $dl = $chapters[$chapIdx]['plain'] ?? strip_tags($chapters[$chapIdx]['content'] ?? '');
     if (!$fullAccess) $dl = mb_substr($dl, 0, (int)floor(mb_strlen($dl) * $paidFraction));
     $fname = preg_replace('/[^A-Za-z0-9 _-]/', '', $book['title']);
@@ -98,6 +148,7 @@ if (isset($_GET['download'])) {
 // লাইভ এডিট ও নতুন অধ্যায় সংরক্ষণ (শুধু অ্যাডমিন)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $isAdminUser) {
     if (isset($_POST['save_edit'])) {
+        $chapters = $getChapters();
         $oldPlain = $chapters[$chapIdx]['plain'] ?? '';
         $editedContent = (string)($_POST['edited_content'] ?? '');
         // রেন্ডারের সময় স্বয়ংক্রিয়ভাবে যুক্ত হওয়া অধ্যায়-ব্যানার, উপশিরোনাম ক্লাস/আইডি, টেবিল র‍্যাপার, ছবির ফ্রেম ও মার্কার সরিয়ে মূল কনটেন্ট সংরক্ষণ
@@ -138,6 +189,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $isAdminUser) {
         header('Location: ' . $redirectUrl);
         exit;
     } elseif (isset($_POST['add_chapter']) && !$isPublicView) {
+        $chapters = $getChapters();
         $chapters[] = [
             'title' => htmlspecialchars($_POST['new_chap_title']),
             'content' => 'নতুন অধ্যায়ের লেখা এখানে এডিট করে যুক্ত করুন...',
@@ -160,82 +212,157 @@ if ($paperIdx !== 'default' && isset($book['papers'][$paperIdx])) {
     $currentPaperName = $selectedPaper['name'];
 }
 
-$currentChapter = $chapters[$chapIdx] ?? ($chapters[0] ?? ['title' => $book['title'] ?? 'প্রথম অধ্যায়', 'content' => '', 'plain' => '']);
+$safeId = preg_replace('/[^A-Za-z0-9_]/', '', $id);
+$srcChapFile = storeChaptersFile($id);
+$srcMtime = file_exists($srcChapFile) ? (int)filemtime($srcChapFile) : 0;
+$srcSize = file_exists($srcChapFile) ? (int)filesize($srcChapFile) : 0;
+$refsHash = md5(json_encode($book['references'] ?? [], JSON_UNESCAPED_UNICODE));
+$renderCacheVer = 1;
+$cacheMetaFile = BOOKS_DATA_DIR . '/' . $safeId . '_render_c' . $chapIdx . '_f1.meta.json';
+$cacheBodyFile = BOOKS_DATA_DIR . '/' . $safeId . '_render_c' . $chapIdx . '_f1.body.html';
 
-// সূচিপত্র (বইয়ের প্রথম অধ্যায়ের ভেতর থেকে)
-$plain0 = $chapters[0]['plain'] ?? strip_tags($chapters[0]['content'] ?? '');
-$toc = parseBookToc($plain0);
-$appendixCandidates = [
-    'ব্যবহৃত সঙ্কেতাদি',
-    'পৌরাণিক ৪০ মূলক সংখ্যার সারণী',
-    'শ্বরবিজ্ঞান বিষয়ক শব্দসংক্ষেপ',
-    'ব্যাকরণ বিষয়ক শব্দসংক্ষেপ',
-    'ভাষা বিষয়ক শব্দসংক্ষেপ',
-    'বিষয় বিষয়ক শব্দসংক্ষেপ',
-    'আরবি, ফার্সি, উর্দু ও হিন্দি ভাষার লিপ্যন্তর নিয়মাবলী',
-    'লিপ্যন্তর- ১',
-    'লিপ্যন্তর- ২',
-    'প্রামাণ্য গ্রন্থপঞ্জি',
-    'অন্যান্য গ্রন্থাদি',
-    'কাঁই পরিবারের প্রামাণ্য গ্রন্থপঞ্জি (সন্নিবদ্ধ চলমান)',
-    'কাঁই পরিবারের প্রকাশিত গ্রন্থসমূহ',
-    'বলন বিষয়ক গ্রন্থ',
-    'লালন বিষয়ক গ্রন্থ',
-    'বৈদিক সঙ্কেত',
-];
-$appendixToc = [];
-if ($plain0 !== '') {
-    $plain0Norm = normBnToc($plain0);
-    foreach ($appendixCandidates as $cand) {
-        if (mb_strpos($plain0Norm, normBnToc(tocKey($cand))) !== false) {
-            $appendixToc[] = $cand;
+$cacheHit = false;
+if ($fullAccess && $_SERVER['REQUEST_METHOD'] !== 'POST' && file_exists($cacheMetaFile) && file_exists($cacheBodyFile)) {
+    $cachedMeta = json_decode(@file_get_contents($cacheMetaFile), true);
+    if (
+        is_array($cachedMeta)
+        && ($cachedMeta['ver'] ?? 0) === $renderCacheVer
+        && ($cachedMeta['src_mtime'] ?? -1) === $srcMtime
+        && ($cachedMeta['src_size'] ?? -1) === $srcSize
+        && ($cachedMeta['refs_hash'] ?? '') === $refsHash
+    ) {
+        $cachedBody = @file_get_contents($cacheBodyFile);
+        if ($cachedBody !== false) {
+            $cacheHit = true;
+            $chapters = [];
+            foreach (($cachedMeta['chapter_titles'] ?? []) as $ct) {
+                $chapters[] = ['title' => $ct];
+            }
+            $currentChapter = ['title' => $cachedMeta['current_title'] ?? ($book['title'] ?? 'প্রথম অধ্যায়')];
+            $toc = $cachedMeta['toc'] ?? [];
+            $appendixToc = $cachedMeta['appendixToc'] ?? [];
+            $readMinutes = (int)($cachedMeta['readMinutes'] ?? 1);
+            $isHtml = (bool)($cachedMeta['isHtml'] ?? true);
+            $bookNotes = $cachedMeta['bookNotes'] ?? [];
+            $bodyHtml = $cachedBody;
         }
     }
 }
-$plainFull = $currentChapter['plain'] ?? strip_tags($currentChapter['content'] ?? '');
-if ($fullAccess) {
-    $bodyHtml = $currentChapter['content'];
-    $isHtml = (strpos($bodyHtml, '<p') !== false || strpos($bodyHtml, '<table') !== false || strpos($bodyHtml, '<img') !== false);
-    if ($isHtml) {
-        // পুরো বইয়ের সব অধ্যায়ে ইনলাইন ফন্ট-ফ্যামিলি সরানো (কনফিগার করা ফন্ট স্ট্যাক স্থায়ী রাখতে)
-        $tmp = preg_replace('/font-family\s*:\s*[^;"]+;?/iu', '', $bodyHtml);
-        if ($tmp !== null) $bodyHtml = $tmp;
-        $tmp = preg_replace('/\s+style="\s*"/u', '', $bodyHtml);
-        if ($tmp !== null) $bodyHtml = $tmp;
+
+if (!$cacheHit) {
+    $chapters = $getChapters();
+    $currentChapter = $chapters[$chapIdx] ?? ($chapters[0] ?? ['title' => $book['title'] ?? 'প্রথম অধ্যায়', 'content' => '', 'plain' => '']);
+
+    // আনুমানিক পাঠকাল (মিনিট)
+    $plainForCount = trim(strip_tags($currentChapter['plain'] ?? $currentChapter['content'] ?? ''));
+    $wordCountEst = $plainForCount !== '' ? (int)preg_match_all('/\S+/u', $plainForCount) : 0;
+    $readMinutes = max(1, (int)ceil($wordCountEst / 180));
+
+    // সূচিপত্র (বইয়ের প্রথম অধ্যায়ের ভেতর থেকে)
+    $plain0 = $chapters[0]['plain'] ?? strip_tags($chapters[0]['content'] ?? '');
+    $toc = parseBookToc($plain0);
+    $appendixCandidates = [
+        'ব্যবহৃত সঙ্কেতাদি',
+        'পৌরাণিক ৪০ মূলক সংখ্যার সারণী',
+        'শ্বরবিজ্ঞান বিষয়ক শব্দসংক্ষেপ',
+        'ব্যাকরণ বিষয়ক শব্দসংক্ষেপ',
+        'ভাষা বিষয়ক শব্দসংক্ষেপ',
+        'বিষয় বিষয়ক শব্দসংক্ষেপ',
+        'আরবি, ফার্সি, উর্দু ও হিন্দি ভাষার লিপ্যন্তর নিয়মাবলী',
+        'লিপ্যন্তর- ১',
+        'লিপ্যন্তর- ২',
+        'প্রামাণ্য গ্রন্থপঞ্জি',
+        'অন্যান্য গ্রন্থাদি',
+        'কাঁই পরিবারের প্রামাণ্য গ্রন্থপঞ্জি (সন্নিবদ্ধ চলমান)',
+        'কাঁই পরিবারের প্রকাশিত গ্রন্থসমূহ',
+        'বলন বিষয়ক গ্রন্থ',
+        'লালন বিষয়ক গ্রন্থ',
+        'বৈদিক সঙ্কেত',
+    ];
+    $appendixToc = [];
+    if ($plain0 !== '') {
+        $plain0Norm = normBnToc($plain0);
+        foreach ($appendixCandidates as $cand) {
+            if (mb_strpos($plain0Norm, normBnToc(tocKey($cand))) !== false) {
+                $appendixToc[] = $cand;
+            }
+        }
     }
-    if ($chapIdx === 0 && !empty($toc)) {
+    $plainFull = $currentChapter['plain'] ?? strip_tags($currentChapter['content'] ?? '');
+    if ($fullAccess) {
+        $bodyHtml = $currentChapter['content'];
+        $isHtml = (strpos($bodyHtml, '<p') !== false || strpos($bodyHtml, '<table') !== false || strpos($bodyHtml, '<img') !== false);
         if ($isHtml) {
-            // অপ্রয়োজনীয় 14pt/খালি <span> ট্যাগ সরিয়ে DOM হালকা করা (সম্পাদনা ও পাবলিক ভিউ উভয় পেজে Out of Memory প্রতিরোধ)
-            $tmp = preg_replace('/font-size:\s*14pt;?/u', '', $bodyHtml);
+            // পুরো বইয়ের সব অধ্যায়ে ইনলাইন ফন্ট-ফ্যামিলি সরানো (কনফিগার করা ফন্ট স্ট্যাক স্থায়ী রাখতে)
+            $tmp = preg_replace('/font-family\s*:\s*[^;"]+;?/iu', '', $bodyHtml);
             if ($tmp !== null) $bodyHtml = $tmp;
             $tmp = preg_replace('/\s+style="\s*"/u', '', $bodyHtml);
             if ($tmp !== null) $bodyHtml = $tmp;
-            for ($si = 0; $si < 3; $si++) {
-                $tmp = preg_replace('/<span>([^<]*)<\/span>/u', '$1', $bodyHtml);
-                if ($tmp === null || $tmp === $bodyHtml) break;
-                $bodyHtml = $tmp;
+        }
+        if ($chapIdx === 0 && !empty($toc)) {
+            if ($isHtml) {
+                // অপ্রয়োজনীয় 14pt/খালি <span> ট্যাগ সরিয়ে DOM হালকা করা (সম্পাদনা ও পাবলিক ভিউ উভয় পেজে Out of Memory প্রতিরোধ)
+                $tmp = preg_replace('/font-size:\s*14pt;?/u', '', $bodyHtml);
+                if ($tmp !== null) $bodyHtml = $tmp;
+                $tmp = preg_replace('/\s+style="\s*"/u', '', $bodyHtml);
+                if ($tmp !== null) $bodyHtml = $tmp;
+                for ($si = 0; $si < 3; $si++) {
+                    $tmp = preg_replace('/<span>([^<]*)<\/span>/u', '$1', $bodyHtml);
+                    if ($tmp === null || $tmp === $bodyHtml) break;
+                    $bodyHtml = $tmp;
+                }
+                for ($si = 0; $si < 3; $si++) {
+                    $tmp = preg_replace('/<span (style="[^"]+")>([^<]*)<\/span><span \1>([^<]*)<\/span>/u', '<span $1>$2$3</span>', $bodyHtml);
+                    if ($tmp === null || $tmp === $bodyHtml) break;
+                    $bodyHtml = $tmp;
+                }
+                // অধ্যায়ের শিরোনাম ও উপশিরোনামগুলোকে সূচিপত্র অনুসারে নান্দনিক হেডিংয়ে রূপান্তর
+                $bodyHtml = decorateChapterHeadings($bodyHtml, $toc, $appendixToc ?? []);
+            } else {
+                $bodyHtml = injectBodyStartMarker($bodyHtml);
             }
-            for ($si = 0; $si < 3; $si++) {
-                $tmp = preg_replace('/<span (style="[^"]+")>([^<]*)<\/span><span \1>([^<]*)<\/span>/u', '<span $1>$2$3</span>', $bodyHtml);
-                if ($tmp === null || $tmp === $bodyHtml) break;
-                $bodyHtml = $tmp;
-            }
-            // অধ্যায়ের শিরোনাম ও উপশিরোনামগুলোকে সূচিপত্র অনুসারে নান্দনিক হেডিংয়ে রূপান্তর
-            $bodyHtml = decorateChapterHeadings($bodyHtml, $toc, $appendixToc ?? []);
-        } else {
-            $bodyHtml = injectBodyStartMarker($bodyHtml);
+        }
+    } else {
+        // আংশিক আনলক — প্রথম অংশের পূর্বরূপ
+        $isHtml = false;
+        $showLen = (int)floor(mb_strlen($plainFull) * $paidFraction);
+        $bodyHtml = mb_substr($plainFull, 0, $showLen);
+    }
+    $bodyHtml = numberBookNotesInContent($bodyHtml, $isHtml);
+    if ($isHtml) {
+        $bodyHtml = decorateBookTables($bodyHtml);
+        $bodyHtml = decorateBookImages($bodyHtml);
+    }
+    $bookNotes = extractBookNotes($fullAccess ? $plainFull : $bodyHtml, $book);
+
+    if ($fullAccess) {
+        storeInit();
+        $chapterTitles = [];
+        foreach ($chapters as $ch) {
+            $chapterTitles[] = $ch['title'] ?? '';
+        }
+        $metaToSave = [
+            'ver' => $renderCacheVer,
+            'src_mtime' => $srcMtime,
+            'src_size' => $srcSize,
+            'refs_hash' => $refsHash,
+            'chapter_titles' => $chapterTitles,
+            'current_title' => $currentChapter['title'] ?? '',
+            'toc' => $toc,
+            'appendixToc' => $appendixToc,
+            'readMinutes' => $readMinutes,
+            'isHtml' => $isHtml,
+            'bookNotes' => $bookNotes,
+        ];
+        $tmpBody = $cacheBodyFile . '.tmp';
+        if (file_put_contents($tmpBody, $bodyHtml, LOCK_EX) !== false) {
+            @rename($tmpBody, $cacheBodyFile);
+        }
+        $tmpMeta = $cacheMetaFile . '.tmp';
+        if (file_put_contents($tmpMeta, json_encode($metaToSave, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), LOCK_EX) !== false) {
+            @rename($tmpMeta, $cacheMetaFile);
         }
     }
-} else {
-    // আংশিক আনলক — প্রথম অংশের পূর্বরূপ
-    $isHtml = false;
-    $showLen = (int)floor(mb_strlen($plainFull) * $paidFraction);
-    $bodyHtml = mb_substr($plainFull, 0, $showLen);
-}
-$bodyHtml = numberBookNotesInContent($bodyHtml, $isHtml);
-if ($isHtml) {
-    $bodyHtml = decorateBookTables($bodyHtml);
-    $bodyHtml = decorateBookImages($bodyHtml);
 }
 
 // ক্যাটাগরি অনুযায়ী অটো-থিম (উইকিপিডিয়া টেমপ্লেটের সূক্ষ্ম রঙ)
@@ -1012,28 +1139,6 @@ function extractBookNotes($plain, $book = []) {
     }
     return $notes;
 }
-$bookNotes = extractBookNotes($fullAccess ? $plainFull : $bodyHtml, $book);
-
-// পরিশিষ্ট শিরোনামসমূহ পূর্বেই $appendixToc-এ সংগৃহীত হয়েছে
-
-// বইয়ের ভেতরে সার্চের জন্য অধ্যায়ের লেখা (অ্যাক্সেস অনুযায়ী সীমিত)
-$searchChapters = [];
-if ($fullAccess) {
-    foreach ($chapters as $ci => $ch) {
-        $searchChapters[] = [
-            'idx' => $ci,
-            'title' => $ch['title'],
-            'plain' => $ch['plain'] ?? strip_tags($ch['content'] ?? ''),
-        ];
-    }
-} else {
-    $showLen = (int)floor(mb_strlen($plainFull) * $paidFraction);
-    $searchChapters[] = [
-        'idx' => $chapIdx,
-        'title' => $currentChapter['title'],
-        'plain' => mb_substr($plainFull, 0, $showLen),
-    ];
-}
 ?>
 <!DOCTYPE html>
 <html lang="bn">
@@ -1414,53 +1519,43 @@ if ($fullAccess) {
 
         /* ---------- গ্রন্থপরিচিতি ও প্রকাশনা কার্ড (কলোফন) ---------- */
         .mw-ib-colophon {
-            background: linear-gradient(180deg, #fffdf9 0%, #f8fafc 100%);
+            background: #ffffff;
             border: 1px solid color-mix(in srgb, var(--accent) 28%, #d5dbe3);
             position: relative;
         }
         .mw-col-head {
-            padding: 13px 14px 10px;
+            padding: 10px 14px;
             text-align: center;
             background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 13%, #ffffff), color-mix(in srgb, var(--accent) 5%, #fff8eb));
             border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, #e2e8f0);
         }
         .mw-col-ornament {
-            font-size: .72rem; font-weight: 700; letter-spacing: .08em;
-            color: var(--accent); margin-bottom: 5px;
+            font-size: .76rem; font-weight: 700; letter-spacing: .06em;
+            color: var(--accent); margin: 0;
         }
-        .mw-col-logo {
-            margin: 6px auto 6px;
-            text-align: center;
-        }
-        .mw-col-logo img {
-            width: 52px;
-            height: auto;
-            display: inline-block;
-        }
-        .mw-col-booktitle {
-            font-size: .96rem; font-weight: 700; color: #0f172a; line-height: 1.3; margin: 0;
-        }
-        .mw-col-body { padding: 6px 10px 10px; }
+        .mw-col-body { padding: 4px 10px 10px; }
         .mw-col-table {
-            width: 100%; border-collapse: collapse; font-size: .81rem; line-height: 1.38;
+            width: 100%; border-collapse: collapse; font-size: .82rem; line-height: 1.45;
         }
         .mw-col-table th, .mw-col-table td {
-            padding: 5px 6px; vertical-align: top;
-            border-top: 1px solid color-mix(in srgb, var(--accent) 14%, #e2e8f0);
+            padding: 4px 8px; vertical-align: top;
+            border-top: 1px solid #334155;
         }
         .mw-col-table tr:first-child th, .mw-col-table tr:first-child td { border-top: 0; }
         .mw-col-table th {
-            width: 28%; color: #0f172a; font-weight: 700; text-align: right;
-            padding-right: 9px; white-space: nowrap;
-            border-right: 1px solid color-mix(in srgb, var(--accent) 22%, #cbd5e1);
+            width: 26%; color: #111827; font-weight: 700; text-align: right;
+            padding-right: 10px; white-space: nowrap;
+            border-right: 1px solid #334155;
         }
         .mw-col-table td {
-            color: #1e293b; text-align: left; padding-left: 9px;
+            color: #111827; text-align: left; padding-left: 10px; font-weight: 400;
         }
-        .mw-col-line { margin: 0; line-height: 1.38; }
-        .mw-col-cover-credit { color: #2563eb; font-weight: 600; }
-        .mw-col-typeset-credit { color: #15803d; font-weight: 600; }
-        .mw-col-isbn-label { color: #15803d; font-weight: 700; }
+        .mw-col-logo-img {
+            width: 34px; height: auto; display: block; margin: 2px 0;
+        }
+        .mw-col-cover-credit { color: #2563eb; font-weight: 500; }
+        .mw-col-typeset-credit { color: #15803d; font-weight: 500; }
+        .mw-col-isbn-label { color: #16a34a; font-weight: 700; }
 
         /* ---------- ৪. গুরুত্বপূর্ণ টীকা, নোট ও ব্যাখ্যা বক্স (কনটেন্ট অনুযায়ী অটো-উচ্চতা) ---------- */
         .mw-ib-notes-card {
@@ -1746,6 +1841,8 @@ if ($fullAccess) {
         }
         .mw-body h3 { font-size: 1.22rem; }
         .mw-body p { margin: 0 0 .5rem; line-height: 1.6; scroll-margin-top: calc(var(--mw-topbar-h, 96px) + 16px); text-align: justify; }
+        .mw-body > p, .mw-body > figure.mw-wiki-thumb { content-visibility: auto; contain-intrinsic-size: auto 48px; }
+        .mw-body > .mw-table-wrap { content-visibility: auto; contain-intrinsic-size: auto 240px; }
         .mw-body ul, .mw-body ol { margin: 0 0 1rem; padding-left: 1.6rem; line-height: 1.6; }
         .mw-body a { color: var(--wp-link); }
         .mw-body a:visited { color: var(--wp-link-visited); }
@@ -1939,10 +2036,13 @@ if ($fullAccess) {
         body.mw-public.mw-theme-dark .mw-col-head,
         body.mw-public.mw-theme-dark .mw-notes-head,
         body.mw-public.mw-theme-dark .mw-notes-footer { background: #1e293b; border-color: #374151; }
-        body.mw-public.mw-theme-dark .mw-col-booktitle,
         body.mw-public.mw-theme-dark .mw-col-table th,
         body.mw-public.mw-theme-dark .mw-col-table td,
-        body.mw-public.mw-theme-dark .mw-note-heading { color: #f3f4f6; }
+        body.mw-public.mw-theme-dark .mw-note-heading { color: #f3f4f6; border-color: #475569; }
+        body.mw-public.mw-theme-dark .mw-col-logo-img { filter: invert(1); }
+        body.mw-public.mw-theme-dark .mw-col-cover-credit { color: #60a5fa; }
+        body.mw-public.mw-theme-dark .mw-col-typeset-credit,
+        body.mw-public.mw-theme-dark .mw-col-isbn-label { color: #4ade80; }
         body.mw-public.mw-theme-dark .mw-note-item { background: #111827; border-color: #374151; }
         body.mw-public.mw-theme-dark .mw-note-text { color: #d1d5db; }
         body.mw-public.mw-theme-dark .mw-reader-btn:hover { background: #374151; }
@@ -2309,93 +2409,59 @@ if ($fullAccess) {
                 <div class="mw-ib-card mw-ib-colophon">
                     <div class="mw-col-head">
                         <div class="mw-col-ornament">✦ গ্রন্থপরিচিতি ও প্রকাশনা ✦</div>
-                        <?php if (!empty($col['logo'])): ?>
-                            <div class="mw-col-logo"><img src="<?= htmlspecialchars($col['logo']) ?>" alt="সমাচার লোগো"></div>
-                        <?php endif; ?>
-                        <div class="mw-col-booktitle"><?= htmlspecialchars($col['book_title'] ?? $book['title']) ?></div>
-                        <?php if (!empty($col['author'])): ?>
-                            <span class="mw-col-author-pill">লেখক: <?= htmlspecialchars($col['author']) ?></span>
-                        <?php endif; ?>
                     </div>
 
                     <div class="mw-col-body">
-                        <div class="mw-col-section">
-                            <div class="mw-col-sec-title">🏛️ প্রকাশনা</div>
-                            <?php if (!empty($col['publisher'])): ?>
-                                <div class="mw-col-line"><b>প্রকাশক:</b> <?= htmlspecialchars($col['publisher']) ?></div>
-                            <?php endif; ?>
-                            <?php if (!empty($col['publishing_house'])): ?>
-                                <div class="mw-col-pub-house"><?= htmlspecialchars($col['publishing_house']) ?></div>
-                            <?php endif; ?>
-                            <?php if (!empty($col['address'])): ?>
-                                <div class="mw-col-line"><?= htmlspecialchars($col['address']) ?></div>
-                            <?php endif; ?>
-                            <?php if (!empty($col['phones']) && is_array($col['phones'])): ?>
-                                <div class="mw-col-phones">
-                                    <?php foreach ($col['phones'] as $ph): ?>
-                                        <span class="mw-col-phone">📞 <?= htmlspecialchars($ph) ?></span>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php endif; ?>
-                        </div>
-
-                        <?php if (!empty($col['editions']) && is_array($col['editions'])): ?>
-                        <div class="mw-col-section">
-                            <div class="mw-col-sec-title">🕰️ প্রকাশকাল ও সংস্করণ</div>
-                            <ul class="mw-col-timeline">
-                                <?php foreach ($col['editions'] as $ed): ?>
-                                    <li>
-                                        <span class="mw-col-ed-label"><?= htmlspecialchars($ed['label'] ?? '') ?></span>,
-                                        <?= htmlspecialchars($ed['date'] ?? '') ?>
-                                        <?php if (!empty($ed['note'])): ?>
-                                            <span class="mw-col-ed-note"><?= htmlspecialchars($ed['note']) ?></span>
-                                        <?php endif; ?>
-                                    </li>
-                                <?php endforeach; ?>
-                            </ul>
-                        </div>
-                        <?php endif; ?>
-
-                        <?php if (!empty($col['credits']) && is_array($col['credits'])): ?>
-                        <div class="mw-col-section">
-                            <div class="mw-col-sec-title">✒️ সৃজন ও মুদ্রণ</div>
-                            <table class="mw-col-kv">
-                                <?php foreach ($col['credits'] as $cr): ?>
-                                    <tr>
-                                        <th><?= htmlspecialchars($cr['label'] ?? '') ?></th>
-                                        <td><?= htmlspecialchars($cr['value'] ?? '') ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </table>
-                        </div>
-                        <?php endif; ?>
-
-                        <?php if (!empty($col['distributors']) && is_array($col['distributors'])): ?>
-                        <div class="mw-col-section">
-                            <div class="mw-col-sec-title">🌐 পরিবেশক</div>
-                            <div class="mw-col-dist">
-                                <?php foreach ($col['distributors'] as $dist): ?>
-                                    <div class="mw-col-dist-item">
-                                        <b><?= htmlspecialchars($dist['label'] ?? '') ?>:</b> <?= htmlspecialchars($dist['value'] ?? '') ?>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        </div>
-                        <?php endif; ?>
-                    </div>
-
-                    <div class="mw-col-footer">
-                        <div class="mw-col-price-row">
-                            <?php if (!empty($col['price_bdt'])): ?>
-                                <span class="mw-col-price-badge">মূল্য: <?= htmlspecialchars($col['price_bdt']) ?></span>
-                            <?php endif; ?>
-                            <?php if (!empty($col['price_usd'])): ?>
-                                <span class="mw-col-usd-badge"><?= htmlspecialchars($col['price_usd']) ?></span>
-                            <?php endif; ?>
-                        </div>
-                        <?php if (!empty($col['isbn'])): ?>
-                            <div class="mw-col-isbn">ISBN : <?= htmlspecialchars($col['isbn']) ?></div>
-                        <?php endif; ?>
+                        <table class="mw-col-table">
+                            <tr>
+                                <th></th>
+                                <td><img src="uploads/books/samachar_logo.png" alt="সমাচার লোগো" class="mw-col-logo-img"></td>
+                            </tr>
+                            <tr>
+                                <th></th>
+                                <td><strong>আত্মতত্ত্ব ভেদ [মানবদেহ] (১ম খণ্ড)</strong></td>
+                            </tr>
+                            <tr>
+                                <th>লেখক</th>
+                                <td>বলন কাঁইজি</td>
+                            </tr>
+                            <tr>
+                                <th>প্রকাশক</th>
+                                <td>মোঃ শাহ্ আলম সরকার<br>সমাচার<br>৩৭ পি. কে. রায় রোড, বাংলাবাজার, ঢাকা</td>
+                            </tr>
+                            <tr>
+                                <th>ফোন</th>
+                                <td>০২-৪৭১১৬১৪৩ ০১৭৩৫-৬৭৪৬৫৭</td>
+                            </tr>
+                            <tr>
+                                <th>প্রকাশকাল</th>
+                                <td>তৃতীয় সংস্করণ, সেপ্টেম্বর ২০২৫<br>(পরিমার্জিত ও সংশোধিত সংস্করণ)<br>দ্বিতীয় সংস্করণ, বইমেলা ২০১৮<br>প্রথম প্রকাশ এপ্রিল ২০১১</td>
+                            </tr>
+                            <tr>
+                                <th>গ্রন্থস্বত্ব</th>
+                                <td>লেখক</td>
+                            </tr>
+                            <tr>
+                                <th>প্রচ্ছদ</th>
+                                <td><span class="mw-col-cover-credit">মশিউর রহমান</span></td>
+                            </tr>
+                            <tr>
+                                <th>বর্ণবিন্যাস</th>
+                                <td><span class="mw-col-typeset-credit">সজিব হোসেন<br>কম্পিউটার সেকশন কাঁই ফাউন্ডেশন, ঢাকা</span></td>
+                            </tr>
+                            <tr>
+                                <th>পরিবেশক</th>
+                                <td>এস.এস. বুক্স ৩৮ বাংলাবাজার, ঢাকা<br>উত্তর আমেরিকা পরিবেশক মুক্তধারা, জ্যাকশন হাইট, নিউইয়র্ক, যুক্তরাষ্ট্র। যুক্তরাজ্য পরিবেশক সঙ্গীতা লিমিটেড, ২২ ব্রিকলেন, লন্ডন, যুক্তরাজ্য</td>
+                            </tr>
+                            <tr>
+                                <th>মুদ্রণ</th>
+                                <td>অনন্যা প্রিন্টার্স</td>
+                            </tr>
+                            <tr>
+                                <th>মূল্য</th>
+                                <td>৫০০ টাকা<br>US $ : 10.00<br><span class="mw-col-isbn-label">ISBN</span> : 984-70182-0014-2</td>
+                            </tr>
+                        </table>
                     </div>
                 </div>
                 <?php endif; ?>
@@ -2445,7 +2511,7 @@ if ($fullAccess) {
                     <h1 class="mw-pub-hero-title"><?= htmlspecialchars($book['title']) ?></h1>
                     <p class="mw-pub-hero-sub">লেখক: <b><?= htmlspecialchars($book['author'] ?? '') ?></b><?php if (!empty($currentChapter['title']) && $currentChapter['title'] !== ($book['title'] ?? '')): ?> · <?= htmlspecialchars($currentChapter['title']) ?><?php endif; ?></p>
                 </header>
-                <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="true">
+                <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="false">
                     <?= $isHtml ? $bodyHtml : nl2br($bodyHtml) ?>
                 </div>
 
@@ -2495,17 +2561,43 @@ if ($fullAccess) {
 
 <script>
 /* ---------- বইয়ের ভেতরে সার্চ ---------- */
-const BOOK_CHAPTERS = <?= json_encode($searchChapters, JSON_UNESCAPED_UNICODE) ?>;
+let BOOK_CHAPTERS = null;
+let _bookChaptersLoading = false;
+let _bookChaptersQueue = [];
 const BOOK_ID = <?= json_encode((string)$id, JSON_UNESCAPED_UNICODE) ?>;
 const BOOK_PAPER = <?= json_encode((string)$paperIdx, JSON_UNESCAPED_UNICODE) ?>;
+const BOOK_CHAP = <?= (int)$chapIdx ?>;
 let searchQuery = '';
+
+function ensureBookChaptersLoaded(cb) {
+    if (BOOK_CHAPTERS !== null) { if (cb) cb(); return; }
+    if (cb) _bookChaptersQueue.push(cb);
+    if (_bookChaptersLoading) return;
+    _bookChaptersLoading = true;
+    fetch('?id=' + encodeURIComponent(BOOK_ID) + '&chap=' + BOOK_CHAP + '&ajax=search_data')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            BOOK_CHAPTERS = Array.isArray(data) ? data : [];
+            _bookChaptersLoading = false;
+            var q = _bookChaptersQueue.splice(0);
+            q.forEach(function (fn) { fn(); });
+        })
+        .catch(function () {
+            BOOK_CHAPTERS = [];
+            _bookChaptersLoading = false;
+            var q = _bookChaptersQueue.splice(0);
+            q.forEach(function (fn) { fn(); });
+        });
+}
 
 function openBookSearch() {
     document.getElementById('bookSearchModal').style.display = 'flex';
     const inp = document.getElementById('bookSearchInput');
     inp.value = searchQuery;
     inp.focus();
-    if (searchQuery) runBookSearch(searchQuery);
+    ensureBookChaptersLoaded(function () {
+        if (searchQuery) runBookSearch(searchQuery);
+    });
 }
 
 function closeBookSearch() {
@@ -2530,6 +2622,11 @@ function runBookSearch(q) {
     searchQuery = String(q == null ? '' : q).trim();
     const resultsEl = document.getElementById('bookSearchResults');
     if (!searchQuery) { resultsEl.innerHTML = '<p class="bs-empty">খুঁজতে কিছু লিখুন।</p>'; return; }
+    if (BOOK_CHAPTERS === null) {
+        resultsEl.innerHTML = '<p class="bs-empty">সার্চ ডেটা লোড হচ্ছে...</p>';
+        ensureBookChaptersLoaded(function () { runBookSearch(searchQuery); });
+        return;
+    }
     const needle = searchQuery.toLocaleLowerCase();
     const out = [];
     BOOK_CHAPTERS.forEach(function (ch) {
@@ -2681,6 +2778,23 @@ function findInIndex(idx, key, from, end) {
 
 function precomputeTocTargets() {
     tocTargets = {};
+    var links = Array.prototype.slice.call(document.querySelectorAll('.mw-toc-list a[data-key]'));
+    if (!links.length) return;
+
+    // দ্রুত O(1) ম্যাপিং: সার্ভার-সাইডে ইতিমধ্যে id="toc-chap-..." বসানো থাকলে DOM স্ক্যান এড়িয়ে যাওয়া
+    var hasServerAnchors = !!document.getElementById('toc-chap-0');
+    if (hasServerAnchors) {
+        links.forEach(function (a) {
+            var tid = (a.getAttribute('data-target') || '').trim();
+            var key = (a.getAttribute('data-key') || '').trim();
+            if (tid && key) {
+                var el = document.getElementById(tid);
+                if (el) tocTargets[key] = el;
+            }
+        });
+        return;
+    }
+
     var idx = buildParaIndex();
     if (!idx || !idx.length) return;
 
@@ -2688,8 +2802,6 @@ function precomputeTocTargets() {
     var cs = 0;
     for (var i = 0; i < idx.length; i++) if (idx[i].raw.indexOf('সূচিপত্র') !== -1) { cs = i + 1; break; }
 
-    var links = Array.prototype.slice.call(document.querySelectorAll('.mw-toc-list a[data-key]'));
-    if (!links.length) return;
     var chapLinks = links.filter(function (a) { return a.hasAttribute('data-firstsub'); });
 
     // ধাপ ১: অধ্যায়ের সূচনা-শিরোনাম (স্বতন্ত্র কার্সর)
@@ -2827,7 +2939,13 @@ document.addEventListener('click', function (e) {
     sb.classList.remove('open');
 });
 
-window.addEventListener('load', precomputeTocTargets);
+window.addEventListener('load', function () {
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(precomputeTocTargets, { timeout: 500 });
+    } else {
+        setTimeout(precomputeTocTargets, 0);
+    }
+});
 
 function setEditMode(on, btn) {
     var titleEl = document.getElementById('editableTitle');
@@ -3061,9 +3179,20 @@ function updateToolbarState() {
     }
 }
 
+var _tbRaf = 0;
 document.addEventListener('selectionchange', function () {
+    var bodyEl = document.getElementById('editableContent');
+    var titleEl = document.getElementById('editableTitle');
+    var editing = (bodyEl && bodyEl.getAttribute('contenteditable') === 'true') ||
+        (titleEl && titleEl.getAttribute('contenteditable') === 'true');
+    if (!editing) return;
     saveEditorSelection();
-    updateToolbarState();
+    if (!_tbRaf) {
+        _tbRaf = requestAnimationFrame(function () {
+            _tbRaf = 0;
+            updateToolbarState();
+        });
+    }
 });
 
 window._mwDirty = false;
