@@ -1337,7 +1337,9 @@ if ($fullAccess) {
         <button type="button" class="mw-tool primary" onclick="savePage()">💾 সেভ করুন</button>
         <?php endif; ?>
         <button type="button" class="mw-tool" onclick="window.print()">🖨️ প্রিন্ট / PDF</button>
+        <?php if ($isPublicView): ?>
         <a class="mw-tool" href="?id=<?= $id ?>&paper=<?= $paperIdx ?>&chap=<?= $chapIdx ?>&download=1">⬇️ ডাউনলোড<?= $fullAccess ? '' : ' (আনলক অংশ)' ?></a>
+        <?php endif; ?>
         <button type="button" class="mw-tool" onclick="openBookSearch()">🔍 বইয়ের ভিতরে খুঁজুন</button>
         <?php if (!$isPublicView): ?>
         <button type="button" class="mw-tool" onclick="openMobilePreview()">📱 মোবাইলে দেখুন</button>
