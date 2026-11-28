@@ -2943,59 +2943,113 @@ function moveSearchBoxOutOfWay(markRect) {
     }
 }
 
+let _searchScrollRaf = 0;
+let _searchScrollCancelListeners = null;
+
+function cancelSearchScrollSettle() {
+    if (_searchScrollRaf) {
+        cancelAnimationFrame(_searchScrollRaf);
+        _searchScrollRaf = 0;
+    }
+    if (_searchScrollCancelListeners) {
+        _searchScrollCancelListeners();
+        _searchScrollCancelListeners = null;
+    }
+}
+
 function scrollSearchMarkIntoView(markEl) {
     if (!markEl) return;
-    // content-visibility: auto থাকায় আগে এলিমেন্টটিকে ভিউপোর্টে এনে আসল লেআউট ও অবস্থান পরিমাপ করা হয়
-    markEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+    cancelSearchScrollSettle();
+
+    // content-visibility: auto থাকায় টার্গেট ব্লকটি আগে visible করে লেআউট স্থির করা হয়
+    const body = document.getElementById('editableContent');
+    let blockHost = markEl;
+    while (blockHost && blockHost.parentElement && blockHost.parentElement !== body) {
+        blockHost = blockHost.parentElement;
+    }
+    if (blockHost && blockHost.parentElement === body && blockHost.style) {
+        blockHost.style.contentVisibility = 'visible';
+    }
+
+    // টেবিলের মতো অনুভূমিক স্ক্রল কন্টেইনারসহ এলিমেন্টটিকে ভিউপোর্টে আনা
+    markEl.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
 
     const topClearance = getTopToolbarClearance() + 14;
     const bottomClearance = window.innerHeight - 20;
 
-    function alignMark() {
-        const markRect = markEl.getBoundingClientRect();
+    function computeDesiredTop(markRect) {
         const box = document.getElementById('bsModalBox');
         if (!isSearchModalOpen() || !box) {
-            const desiredTop = topClearance + Math.max(0, (bottomClearance - topClearance - markRect.height) * 0.42);
-            const delta = markRect.top - desiredTop;
-            if (Math.abs(delta) > 4) {
-                window.scrollBy({ top: delta, behavior: 'auto' });
-            }
-            return;
+            return topClearance + Math.max(0, (bottomClearance - topClearance - markRect.height) * 0.42);
         }
-
         const boxRect = box.getBoundingClientRect();
         const pad = 18;
         const horizOverlap = !(markRect.right + pad < boxRect.left || markRect.left - pad > boxRect.right);
-
-        let desiredTop;
         if (!horizOverlap) {
-            desiredTop = topClearance + Math.max(0, (bottomClearance - topClearance - markRect.height) * 0.42);
-        } else {
-            const spaceBelow = bottomClearance - (boxRect.bottom + pad);
-            const spaceAbove = (boxRect.top - pad) - topClearance;
-            if (spaceBelow >= Math.max(80, markRect.height + 24)) {
-                desiredTop = boxRect.bottom + pad + Math.min(60, Math.max(0, (spaceBelow - markRect.height) * 0.35));
-            } else if (spaceAbove >= Math.max(80, markRect.height + 24)) {
-                desiredTop = topClearance + Math.max(0, (spaceAbove - markRect.height) * 0.45);
-            } else {
-                desiredTop = topClearance + Math.max(0, (bottomClearance - topClearance - markRect.height) * 0.42);
-            }
+            return topClearance + Math.max(0, (bottomClearance - topClearance - markRect.height) * 0.42);
         }
+        const spaceBelow = bottomClearance - (boxRect.bottom + pad);
+        const spaceAbove = (boxRect.top - pad) - topClearance;
+        if (spaceBelow >= Math.max(80, markRect.height + 24)) {
+            return boxRect.bottom + pad + Math.min(60, Math.max(0, (spaceBelow - markRect.height) * 0.35));
+        }
+        if (spaceAbove >= Math.max(80, markRect.height + 24)) {
+            return topClearance + Math.max(0, (spaceAbove - markRect.height) * 0.45);
+        }
+        return topClearance + Math.max(0, (bottomClearance - topClearance - markRect.height) * 0.42);
+    }
 
+    function alignMark() {
+        const markRect = markEl.getBoundingClientRect();
+        if (markRect.width === 0 && markRect.height === 0 && markEl.getClientRects().length === 0) {
+            return true;
+        }
+        const desiredTop = computeDesiredTop(markRect);
         const rawTargetY = window.scrollY + (markRect.top - desiredTop);
         const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
         const targetScrollY = Math.max(0, Math.min(maxScrollY, rawTargetY));
 
-        if (Math.abs(targetScrollY - window.scrollY) > 2) {
+        const diff = targetScrollY - window.scrollY;
+        if (Math.abs(diff) > 2) {
             window.scrollTo({ top: targetScrollY, behavior: 'auto' });
         }
 
         const finalRect = markEl.getBoundingClientRect();
         moveSearchBoxOutOfWay(finalRect);
+
+        const inView = finalRect.top >= topClearance - 4 && finalRect.bottom <= bottomClearance + 4;
+        return inView && Math.abs(finalRect.top - desiredTop) <= 6;
     }
 
+    let userAborted = false;
+    function onUserScroll() {
+        userAborted = true;
+        cancelSearchScrollSettle();
+    }
+    window.addEventListener('wheel', onUserScroll, { once: true, passive: true });
+    window.addEventListener('touchstart', onUserScroll, { once: true, passive: true });
+    _searchScrollCancelListeners = function () {
+        window.removeEventListener('wheel', onUserScroll);
+        window.removeEventListener('touchstart', onUserScroll);
+    };
+
     alignMark();
-    requestAnimationFrame(alignMark);
+    let framesLeft = 10;
+    function settleStep() {
+        _searchScrollRaf = 0;
+        if (userAborted || !document.body.contains(markEl)) {
+            cancelSearchScrollSettle();
+            return;
+        }
+        const settled = alignMark();
+        framesLeft--;
+        if (!settled && framesLeft > 0) {
+            _searchScrollRaf = requestAnimationFrame(settleStep);
+        } else {
+            cancelSearchScrollSettle();
+        }
+    }
+    _searchScrollRaf = requestAnimationFrame(settleStep);
 }
 
 function focusBookSearchHit(idx, shouldFocusEditor) {
@@ -3141,8 +3195,8 @@ function highlightAllInDocument(q, jumpToFirst) {
         const p = node.parentElement;
         if (!p) continue;
         const tag = p.tagName;
-        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') continue;
-        if (p.closest && p.closest('mark.mw-search-hit')) continue;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE' || tag === 'SVG') continue;
+        if (p.closest && p.closest('mark.mw-search-hit, [hidden], template, svg, script, style, noscript')) continue;
         if (!node.nodeValue || node.nodeValue.length === 0) continue;
         const blk = getBlockAncestor(p);
         if (blk !== currentBlock) {
@@ -5298,12 +5352,140 @@ window._mwDirty = false;
     window.addEventListener('blur', endDrag);
 })();
 
+function getDirectBodyChild(bodyEl, node) {
+    let cur = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
+    while (cur && cur.parentElement !== bodyEl) {
+        cur = cur.parentElement;
+    }
+    return (cur && cur.parentElement === bodyEl) ? cur : null;
+}
+
+function captureSaveRestoreState(bodyEl) {
+    const state = {
+        scrollY: window.scrollY || window.pageYOffset || 0,
+        editMode: !!(bodyEl && bodyEl.getAttribute('contenteditable') === 'true'),
+        anchorIdx: -1,
+        anchorText: '',
+        anchorViewportTop: 0,
+        caretOffset: -1,
+        searchQuery: typeof searchQuery === 'string' ? searchQuery : '',
+        searchHitIdx: typeof _searchHitIdx === 'number' ? _searchHitIdx : -1
+    };
+    if (!bodyEl) return state;
+
+    let anchorEl = null;
+    let caretNode = null;
+    let caretOff = 0;
+
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+        const r = sel.getRangeAt(0);
+        if (bodyEl.contains(r.startContainer)) {
+            anchorEl = getDirectBodyChild(bodyEl, r.startContainer);
+            caretNode = r.startContainer;
+            caretOff = r.startOffset;
+        }
+    }
+    if (!anchorEl && typeof _savedEdRange !== 'undefined' && _savedEdRange && bodyEl.contains(_savedEdRange.startContainer)) {
+        anchorEl = getDirectBodyChild(bodyEl, _savedEdRange.startContainer);
+        caretNode = _savedEdRange.startContainer;
+        caretOff = _savedEdRange.startOffset;
+    }
+    if (anchorEl) {
+        const rect = anchorEl.getBoundingClientRect();
+        // কার্সার এলিমেন্টটি স্ক্রিনের বাইরে থাকলে বর্তমান ভিউপোর্টের দৃশ্যমান এলিমেন্টকে অ্যাংকর ধরা
+        if (rect.bottom < 0 || rect.top > window.innerHeight) {
+            anchorEl = null;
+            caretNode = null;
+        }
+    }
+    if (!anchorEl) {
+        const topClear = typeof getTopToolbarClearance === 'function' ? getTopToolbarClearance() : 80;
+        const children = bodyEl.children;
+        for (let i = 0; i < children.length; i++) {
+            const r = children[i].getBoundingClientRect();
+            if (r.height > 0 && r.bottom > topClear) {
+                anchorEl = children[i];
+                break;
+            }
+        }
+    }
+    if (anchorEl) {
+        state.anchorIdx = Array.prototype.indexOf.call(bodyEl.children, anchorEl);
+        state.anchorText = (anchorEl.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        state.anchorViewportTop = Math.round(anchorEl.getBoundingClientRect().top);
+        if (caretNode && anchorEl.contains(caretNode) && typeof getCharOffsetInElement === 'function') {
+            state.caretOffset = getCharOffsetInElement(anchorEl, caretNode, caretOff);
+        }
+    }
+    return state;
+}
+
+function restoreCaretInElement(bodyEl, anchorEl, charOffset) {
+    if (!bodyEl || !anchorEl || charOffset < 0) return;
+    try {
+        const walker = document.createTreeWalker(anchorEl, NodeFilter.SHOW_TEXT, null);
+        let remaining = charOffset;
+        let node;
+        let targetNode = null;
+        let targetOff = 0;
+        while ((node = walker.nextNode())) {
+            const len = node.nodeValue ? node.nodeValue.length : 0;
+            if (remaining <= len) {
+                targetNode = node;
+                targetOff = remaining;
+                break;
+            }
+            remaining -= len;
+        }
+        if (targetNode) {
+            const range = document.createRange();
+            range.setStart(targetNode, targetOff);
+            range.collapse(true);
+            bodyEl.focus({ preventScroll: true });
+            const sel = window.getSelection();
+            if (sel) {
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
+    } catch (e) {}
+}
+
+function findRestoreAnchorElement(bodyEl, state) {
+    if (!bodyEl || !state || state.anchorIdx < 0) return null;
+    const children = bodyEl.children;
+    if (!children || !children.length) return null;
+    const idx = Math.min(Math.max(0, state.anchorIdx), children.length - 1);
+    const needle = (state.anchorText || '').slice(0, 40);
+    const norm = function (el) {
+        return (el && el.textContent ? el.textContent : '').replace(/\s+/g, ' ').trim();
+    };
+    if (!needle || norm(children[idx]).indexOf(needle) !== -1) {
+        return children[idx];
+    }
+    for (let d = 1; d <= 15; d++) {
+        if (idx + d < children.length && norm(children[idx + d]).indexOf(needle) !== -1) return children[idx + d];
+        if (idx - d >= 0 && norm(children[idx - d]).indexOf(needle) !== -1) return children[idx - d];
+    }
+    for (let i = 0; i < children.length; i++) {
+        if (norm(children[i]).indexOf(needle) !== -1) return children[i];
+    }
+    return children[idx];
+}
+
 function savePage(toPublic) {
     var form = document.getElementById('saveForm');
     if (!form) return;
     var titleEl = document.getElementById('editableTitle');
     document.getElementById('hiddenTitle').value = titleEl ? titleEl.innerText : <?= json_encode($currentChapter['title'], JSON_UNESCAPED_UNICODE) ?>;
     var bodyEl = document.getElementById('editableContent');
+    if (!toPublic) {
+        try {
+            var restoreKey = 'mw_save_restore_' + <?= json_encode($id . '_' . $paperIdx . '_' . $chapIdx) ?>;
+            sessionStorage.setItem(restoreKey, JSON.stringify(captureSaveRestoreState(bodyEl)));
+        } catch (err) {}
+    }
     var cleanClone = bodyEl.cloneNode(true);
     cleanClone.querySelectorAll('mark.mw-search-hit').forEach(function (m) {
         var p = m.parentNode;
@@ -5340,6 +5522,108 @@ document.addEventListener('DOMContentLoaded', function () {
     var u = new URL(window.location.href);
     if (u.searchParams.get('saved') === '1') {
         var isPub = u.searchParams.get('view') === 'public' || u.searchParams.get('public') === '1';
+        if (!isPub) {
+            try {
+                var restoreKey = 'mw_save_restore_' + <?= json_encode($id . '_' . $paperIdx . '_' . $chapIdx) ?>;
+                var raw = sessionStorage.getItem(restoreKey);
+                if (raw) {
+                    sessionStorage.removeItem(restoreKey);
+                    var state = JSON.parse(raw);
+                    if (state && state.editMode && typeof setEditMode === 'function') {
+                        var editTab = document.querySelector('.mw-tab[onclick*="setEditMode(true"]');
+                        setEditMode(true, editTab);
+                        if (typeof syncTopbarHeight === 'function') syncTopbarHeight();
+                    }
+                    if (state) {
+                        var bodyEl = document.getElementById('editableContent');
+                        var anchorEl = findRestoreAnchorElement(bodyEl, state);
+                        var targetY = typeof state.scrollY === 'number' ? state.scrollY : 0;
+                        if (anchorEl || targetY > 0) {
+                            if ('scrollRestoration' in history) {
+                                try { history.scrollRestoration = 'manual'; } catch (e) {}
+                            }
+                            var userInteracted = false;
+                            var markInteracted = function () { userInteracted = true; };
+                            window.addEventListener('wheel', markInteracted, { once: true, passive: true });
+                            window.addEventListener('touchstart', markInteracted, { once: true, passive: true });
+
+                            var alignSavedPosition = function () {
+                                if (userInteracted) return true;
+                                if (anchorEl) {
+                                    if (anchorEl.style) anchorEl.style.contentVisibility = 'visible';
+                                    var topClear = (typeof getTopToolbarClearance === 'function' ? getTopToolbarClearance() : 80) + 8;
+                                    var maxTop = Math.max(topClear + 20, window.innerHeight - 100);
+                                    var desiredTop = (typeof state.anchorViewportTop === 'number' && state.anchorViewportTop >= topClear && state.anchorViewportTop <= maxTop)
+                                        ? state.anchorViewportTop
+                                        : Math.round(topClear + (window.innerHeight - topClear) * 0.28);
+                                    var rect = anchorEl.getBoundingClientRect();
+                                    if (rect.top < 0 || rect.top > window.innerHeight) {
+                                        anchorEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+                                        rect = anchorEl.getBoundingClientRect();
+                                    }
+                                    var delta = rect.top - desiredTop;
+                                    if (Math.abs(delta) > 3) {
+                                        window.scrollBy({ top: delta, behavior: 'auto' });
+                                    }
+                                    var afterRect = anchorEl.getBoundingClientRect();
+                                    return Math.abs(afterRect.top - desiredTop) <= 4;
+                                } else if (targetY > 0) {
+                                    window.scrollTo({ top: targetY, behavior: 'auto' });
+                                    return Math.abs((window.scrollY || 0) - targetY) <= 4;
+                                }
+                                return true;
+                            };
+
+                            if (anchorEl && anchorEl.style) anchorEl.style.contentVisibility = 'visible';
+                            if (anchorEl) anchorEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+                            alignSavedPosition();
+
+                            var settleLeft = 10;
+                            var runSettle = function () {
+                                if (userInteracted) return;
+                                var ok = alignSavedPosition();
+                                settleLeft--;
+                                if (!ok && settleLeft > 0) {
+                                    requestAnimationFrame(runSettle);
+                                }
+                            };
+                            requestAnimationFrame(runSettle);
+
+                            window.addEventListener('load', function onSaveRestoreLoad() {
+                                window.removeEventListener('load', onSaveRestoreLoad);
+                                if (!userInteracted) {
+                                    alignSavedPosition();
+                                    requestAnimationFrame(alignSavedPosition);
+                                }
+                            });
+                            if (document.fonts && document.fonts.ready) {
+                                document.fonts.ready.then(function () {
+                                    if (!userInteracted) alignSavedPosition();
+                                });
+                            }
+                            if (state.editMode && anchorEl && typeof state.caretOffset === 'number' && state.caretOffset >= 0) {
+                                restoreCaretInElement(bodyEl, anchorEl, state.caretOffset);
+                            }
+                        }
+                        if (state.searchQuery && typeof highlightAllInDocument === 'function') {
+                            searchQuery = state.searchQuery;
+                            var totalHits = highlightAllInDocument(searchQuery, false);
+                            if (totalHits > 0 && anchorEl && bodyEl) {
+                                var groups = getSearchHitGroups(bodyEl);
+                                var bestIdx = 0;
+                                for (var gi = 0; gi < groups.length; gi++) {
+                                    if (anchorEl.contains(groups[gi][0])) { bestIdx = gi; break; }
+                                }
+                                bodyEl.querySelectorAll('mark.mw-search-hit.is-current').forEach(function (h) { h.classList.remove('is-current'); });
+                                _searchHitIdx = bestIdx;
+                                if (groups[bestIdx]) groups[bestIdx].forEach(function (h) { h.classList.add('is-current'); });
+                                updateBookSearchNav(groups.length);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {}
+        }
         window.showToast(isPub ? '✓ পরিবর্তনগুলো সংরক্ষণ করা হয়েছে এবং পাবলিক ভিউতে যুক্ত হয়েছে' : '✓ পরিবর্তনগুলো সংরক্ষণ করা হয়েছে');
         u.searchParams.delete('saved');
         if (window.history && window.history.replaceState) {
