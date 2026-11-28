@@ -450,7 +450,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <small>মিথোলজি ও থিওলজি আর্কাইভ (১০০ বইয়ের প্রজেক্ট)</small>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-            <a href="index.html" class="btn btn-primary" style="text-decoration: none; background: #2563eb;">📖 বুক ভিউয়ার</a>
+            <?php $firstBookId = !empty($books) ? (array_key_first($books) ?: 'book_6b0656ef422e3') : 'book_6b0656ef422e3'; ?>
+            <a href="read.php?id=<?= urlencode($firstBookId) ?>&paper=default&view=public" class="btn btn-primary" style="text-decoration: none; background: #2563eb; color: #fff;">🌐 পাবলিক বুক ভিউয়ার</a>
             <button class="btn btn-primary" onclick="toggleUpload()">▲/▼ আপলোড ফর্ম দেখুন বা লুকান</button>
         </div>
 

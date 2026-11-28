@@ -1,11 +1,14 @@
 <?php
 session_start();
+require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/store.php';
 
 $books = loadBooks();
 $id = $_GET['id'] ?? '';
 $paperIdx = $_GET['paper'] ?? 'default';
 $chapIdx = isset($_GET['chap']) ? (int)$_GET['chap'] : 0;
+$isAdminUser = isAdmin();
+$isPublicView = !$isAdminUser || (($_GET['view'] ?? '') === 'public') || (($_GET['public'] ?? '') === '1');
 
 // কোনো বই নির্বাচন করা না থাকলে হোমপেজে পাঠিয়ে দিন
 if ($id === '') {
@@ -76,6 +79,10 @@ $fullAccess = $paidFraction >= 1.0;
 $isLocalDev = in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true);
 if ($isLocalDev) $fullAccess = true;
 
+// আনুমানিক পাঠকাল (মিনিট)
+$wordCountEst = count(preg_split('/\s+/u', trim(strip_tags($chapters[$chapIdx]['plain'] ?? $chapters[$chapIdx]['content'] ?? '')), -1, PREG_SPLIT_NO_EMPTY));
+$readMinutes = max(1, (int)ceil($wordCountEst / 180));
+
 // ডাউনলোড (আনলক করা অংশ পর্যন্ত)
 if (isset($_GET['download'])) {
     $dl = $chapters[$chapIdx]['plain'] ?? strip_tags($chapters[$chapIdx]['content'] ?? '');
@@ -88,8 +95,8 @@ if (isset($_GET['download'])) {
     exit;
 }
 
-// লাইভ এডিট ও নতুন অধ্যায় সংরক্ষণ
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// লাইভ এডিট ও নতুন অধ্যায় সংরক্ষণ (শুধু অ্যাডমিন)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $isAdminUser) {
     if (isset($_POST['save_edit'])) {
         $oldPlain = $chapters[$chapIdx]['plain'] ?? '';
         $editedContent = (string)($_POST['edited_content'] ?? '');
@@ -110,7 +117,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $chapters[$chapIdx]['plain'] = $newPlain;
         saveChapters($id, $chapters);
-    } elseif (isset($_POST['add_chapter'])) {
+
+        $toPublic = (($_POST['redirect_public'] ?? '') === '1') || $isPublicView;
+        $redirectUrl = '?id=' . urlencode($id) . '&paper=' . urlencode($paperIdx) . '&chap=' . $chapIdx . ($toPublic ? '&view=public' : '') . '&saved=1';
+        header('Location: ' . $redirectUrl);
+        exit;
+    } elseif (isset($_POST['add_chapter']) && !$isPublicView) {
         $chapters[] = [
             'title' => htmlspecialchars($_POST['new_chap_title']),
             'content' => 'নতুন অধ্যায়ের লেখা এখানে এডিট করে যুক্ত করুন...',
@@ -263,14 +275,17 @@ function parseBookToc($content) {
         if ($t === '') continue;
         if (mb_strpos($t, 'Contents') !== false) continue;
         $hasHash = strpos($t, '#') !== false;
+        $isChapter = false;
         if (!$hasHash && mb_strpos($t, '(') === false && mb_strlen($t) <= 30) {
             $j = $i + 1;
             while ($j <= $last && trim($lines[$j]) === '') $j++;
-            if ($j <= $last && strpos($lines[$j], '#') !== false) {
-                $chapters[] = ['title' => $t, 'subs' => []];
-                $curIdx = count($chapters) - 1;
-                continue;
-            }
+            if ($j <= $last && strpos($lines[$j], '#') !== false) $isChapter = true;
+        }
+        if (!$hasHash && mb_strlen($t) <= 40 && preg_match('/^\S+\s*অধ্যা(?:\x{09DF}|\x{09AF}\x{09BC})$/u', $t)) $isChapter = true;
+        if ($isChapter) {
+            $chapters[] = ['title' => $t, 'subs' => []];
+            $curIdx = count($chapters) - 1;
+            continue;
         }
         if ($curIdx >= 0) {
             $sub = trim(preg_replace('/\s*#\s*\S+\s*$/u', '', $t));
@@ -1025,9 +1040,180 @@ if ($fullAccess) {
         .bs-badge { background: var(--accent); color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 12px; margin-left: 6px; }
         .bs-snippet { font-size: .88rem; color: var(--wp-muted); }
         .bs-snippet mark { background: #fde68a; color: inherit; padding: 0 2px; border-radius: 2px; }
+
+        /* ---------- পাবলিক / প্রকাশিত ভিউ (পাঠকবান্ধব ও নান্দনিক) ---------- */
+        .mw-read-progress {
+            position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 2000;
+            background: transparent; pointer-events: none;
+        }
+        .mw-read-progress-bar {
+            height: 100%; width: 0%;
+            background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #f59e0b));
+            transition: width .08s linear;
+        }
+        body.mw-public {
+            background: #eef1f5;
+        }
+        body.mw-public .mw-app {
+            box-shadow: 0 8px 36px rgba(15, 23, 42, .06);
+        }
+        body.mw-public .mw-topbar {
+            background: rgba(255, 255, 255, .94);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            gap: 6px;
+            padding: 8px clamp(12px, 2.5vw, 24px);
+        }
+        .mw-pub-brand {
+            display: flex; align-items: center; gap: 8px;
+            margin-right: auto; min-width: 0;
+        }
+        .mw-pub-badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700;
+            background: color-mix(in srgb, var(--accent) 12%, #ffffff);
+            color: var(--accent);
+            border: 1px solid color-mix(in srgb, var(--accent) 28%, #cbd5e1);
+            white-space: nowrap;
+        }
+        .mw-pub-chapter-pill {
+            font-size: 12.5px; color: var(--wp-muted); font-weight: 600;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
+        }
+        .mw-reader-controls {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 4px; border-radius: 6px;
+            background: var(--wp-bg-soft); border: 1px solid var(--wp-border-soft);
+        }
+        .mw-reader-btn {
+            padding: 4px 8px; border: 0; border-radius: 4px; background: transparent;
+            color: var(--wp-ink); font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+            transition: background-color .15s, color .15s;
+        }
+        .mw-reader-btn:hover { background: #e2e8f0; }
+        .mw-reader-btn.active { background: var(--accent); color: #fff; }
+        .mw-font-label { font-size: 11.5px; color: var(--wp-muted); padding: 0 3px; min-width: 28px; text-align: center; }
+
+        /* পাবলিক হিরো হেডার */
+        .mw-pub-hero {
+            position: relative;
+            margin: 0 0 22px;
+            padding: 18px 22px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, #ffffff) 0%, #f8fafc 65%, #fffdf8 100%);
+            border: 1px solid color-mix(in srgb, var(--accent) 22%, #e2e8f0);
+            border-left: 5px solid var(--accent);
+        }
+        .mw-pub-hero-meta {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+            margin-bottom: 8px; font-size: 12px;
+        }
+        .mw-pub-cat {
+            padding: 2px 10px; border-radius: 999px; font-weight: 700;
+            background: var(--accent); color: #fff;
+        }
+        .mw-pub-stat {
+            color: var(--wp-muted); font-weight: 600;
+            padding: 2px 8px; border-radius: 999px;
+            background: rgba(255, 255, 255, .85);
+            border: 1px solid var(--wp-border-soft);
+        }
+        .mw-pub-hero-title {
+            margin: 0 0 4px;
+            font-size: clamp(1.5rem, 2.5vw, 2.05rem);
+            font-weight: 700; line-height: 1.28; color: #0f172a;
+        }
+        .mw-pub-hero-sub {
+            margin: 0; font-size: .95rem; color: var(--wp-muted);
+        }
+
+        /* ফোকাস মোড (বাম সাইডবার লুকিয়ে প্রশস্ত পাঠ) */
+        body.mw-public.mw-focus .mw-sidebar { display: none; }
+        body.mw-public.mw-focus .mw-app { max-width: 980px; }
+        body.mw-public.mw-focus .mw-menu-btn { display: inline-block; }
+
+        /* সেপিয়া ও ডার্ক রিডিং থিম (মূল কাগজ default থাকলে প্রযোজ্য) */
+        body.mw-public.mw-theme-sepia {
+            --wp-bg: #fbf5e6;
+            --wp-bg-soft: #f3ead3;
+            --wp-ink: #3b2f22;
+            --wp-muted: #6e5c49;
+            --wp-border-soft: #e4d6b8;
+            background: #ebe0c6;
+        }
+        body.mw-public.mw-theme-sepia .mw-topbar { background: rgba(251, 245, 230, .94); }
+        body.mw-public.mw-theme-sepia .mw-pub-hero {
+            background: linear-gradient(135deg, #f4e8cd 0%, #fbf5e6 100%);
+        }
+        body.mw-public.mw-theme-sepia .mw-pub-hero-title { color: #2b2116; }
+
+        body.mw-public.mw-theme-dark {
+            --wp-bg: #111827;
+            --wp-bg-soft: #1f2937;
+            --wp-ink: #e5e7eb;
+            --wp-muted: #9ca3af;
+            --wp-border: #374151;
+            --wp-border-soft: #2d3748;
+            --wp-link: #60a5fa;
+            --wp-link-visited: #a78bfa;
+            background: #0b0f19;
+        }
+        body.mw-public.mw-theme-dark .mw-topbar { background: rgba(17, 24, 39, .94); }
+        body.mw-public.mw-theme-dark .mw-pub-hero {
+            background: linear-gradient(135deg, #1e293b 0%, #111827 100%);
+            border-color: #334155;
+        }
+        body.mw-public.mw-theme-dark .mw-pub-hero-title { color: #f9fafb; }
+        body.mw-public.mw-theme-dark .mw-pub-stat { background: #1f2937; border-color: #374151; }
+        body.mw-public.mw-theme-dark .mw-ib-card,
+        body.mw-public.mw-theme-dark .mw-ib-author-card,
+        body.mw-public.mw-theme-dark .mw-ib-colophon,
+        body.mw-public.mw-theme-dark .mw-ib-notes-card {
+            background: #1f2937; border-color: #374151;
+        }
+        body.mw-public.mw-theme-dark .mw-ib-author { background: #1e293b; }
+        body.mw-public.mw-theme-dark .mw-col-head,
+        body.mw-public.mw-theme-dark .mw-notes-head,
+        body.mw-public.mw-theme-dark .mw-notes-footer { background: #1e293b; border-color: #374151; }
+        body.mw-public.mw-theme-dark .mw-col-booktitle,
+        body.mw-public.mw-theme-dark .mw-col-table th,
+        body.mw-public.mw-theme-dark .mw-col-table td,
+        body.mw-public.mw-theme-dark .mw-note-heading { color: #f3f4f6; }
+        body.mw-public.mw-theme-dark .mw-note-item { background: #111827; border-color: #374151; }
+        body.mw-public.mw-theme-dark .mw-note-text { color: #d1d5db; }
+        body.mw-public.mw-theme-dark .mw-reader-btn:hover { background: #374151; }
+
+        /* উপরে যাওয়ার ফ্লোটিং বাটন ও টোস্ট */
+        .mw-backtop {
+            position: fixed; right: 20px; bottom: 22px; z-index: 900;
+            width: 42px; height: 42px; border-radius: 50%;
+            border: 1px solid color-mix(in srgb, var(--accent) 40%, #cbd5e1);
+            background: var(--accent); color: #fff; font-size: 18px; font-weight: 700;
+            cursor: pointer; box-shadow: 0 6px 18px rgba(15, 23, 42, .22);
+            opacity: 0; pointer-events: none; transform: translateY(10px);
+            transition: opacity .2s, transform .2s;
+        }
+        .mw-backtop.show { opacity: 1; pointer-events: auto; transform: translateY(0); }
+        .mw-toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(16px);
+            background: #0f172a; color: #fff; padding: 9px 18px; border-radius: 999px;
+            font-size: 13px; font-weight: 600; z-index: 2500; opacity: 0; pointer-events: none;
+            box-shadow: 0 8px 24px rgba(0,0,0,.25); transition: opacity .2s, transform .2s;
+        }
+        .mw-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+        @media (max-width: 700px) {
+            .mw-pub-chapter-pill { display: none; }
+        }
+        @media print {
+            .mw-read-progress, .mw-backtop, .mw-toast { display: none !important; }
+        }
     </style>
 </head>
-<body>
+<body class="<?= $isPublicView ? 'mw-public' : '' ?>">
+
+<?php if ($isPublicView): ?>
+<div class="mw-read-progress" aria-hidden="true"><div class="mw-read-progress-bar" id="mwReadProgressBar"></div></div>
+<?php endif; ?>
 
 <div class="mw-app">
 
@@ -1073,30 +1259,53 @@ if ($fullAccess) {
             <?php endif; ?>
         </ul>
 
+        <?php if (!$isPublicView): ?>
         <form method="POST" class="mw-addchap">
             <input type="text" name="new_chap_title" placeholder="নতুন অধ্যায়ের নাম..." required>
             <button type="submit" name="add_chapter">+ অধ্যায় যুক্ত করুন</button>
         </form>
+        <?php endif; ?>
     </nav>
 </aside>
 
 <!-- মূল অংশ -->
 <div class="mw-main">
     <div class="mw-topbar">
-        <button type="button" class="mw-tool plain mw-menu-btn" onclick="document.getElementById('mwSidebar').classList.toggle('open')">☰</button>
+        <button type="button" class="mw-tool plain mw-menu-btn" onclick="toggleReaderSidebar()">☰</button>
+        <?php if (!$isPublicView): ?>
         <div class="mw-tabs">
-            <button type="button" class="mw-tab" onclick="setEditMode(true, this)">✏️ সম্পাদনা</button>
+            <button type="button" class="mw-tab" onclick="setEditMode(true, this)">✏️ সম্পাদনা করুন</button>
             <button type="button" class="mw-tab active" onclick="setEditMode(false, this)">👁 দেখুন</button>
         </div>
+        <?php else: ?>
+        <div class="mw-pub-brand">
+            <span class="mw-pub-badge">✦ প্রকাশিত সংস্করণ</span>
+            <span class="mw-pub-chapter-pill"><?= htmlspecialchars($book['title']) ?></span>
+        </div>
+        <?php endif; ?>
 
-        <select class="mw-select" onchange="window.location.href='?id=<?= $id ?>&chap=<?= $chapIdx ?>&paper=' + this.value">
+        <select class="mw-select" onchange="window.location.href='?id=<?= $id ?>&chap=<?= $chapIdx ?>&paper=' + this.value + '<?= $isPublicView ? '&view=public' : '' ?>'">
             <option value="">কাগজ পরিবর্তন করুন...</option>
             <?php foreach (($book['papers'] ?? []) as $pIdx => $p): ?>
                 <option value="<?= $pIdx ?>" <?= $paperIdx == $pIdx ? 'selected' : '' ?>><?= htmlspecialchars($p['name']) ?></option>
             <?php endforeach; ?>
         </select>
 
+        <?php if (!$isPublicView): ?>
         <a href="index.php#uploadPanel" class="mw-tool primary" style="margin-right: 8px;">⬆ আপলোডে যান</a>
+        <?php else: ?>
+        <div class="mw-reader-controls" title="পড়ার ফন্টের আকার">
+            <button type="button" class="mw-reader-btn" onclick="adjustReaderFont(-1)" aria-label="ফন্ট ছোট করুন">অ-</button>
+            <span class="mw-font-label" id="mwFontLabel">১৮</span>
+            <button type="button" class="mw-reader-btn" onclick="adjustReaderFont(1)" aria-label="ফন্ট বড় করুন">অ+</button>
+        </div>
+        <div class="mw-reader-controls" title="পড়ার থিম">
+            <button type="button" class="mw-reader-btn active" data-theme-btn="day" onclick="setReaderTheme('day')">☀️</button>
+            <button type="button" class="mw-reader-btn" data-theme-btn="sepia" onclick="setReaderTheme('sepia')">📜</button>
+            <button type="button" class="mw-reader-btn" data-theme-btn="dark" onclick="setReaderTheme('dark')">🌙</button>
+        </div>
+        <button type="button" class="mw-tool" id="mwFocusBtn" onclick="toggleFocusMode()" title="মনোযোগী পাঠ (সাইডবার লুকান)">📖 ফোকাস</button>
+        <?php endif; ?>
 
         <div style="display:flex; gap:6px; align-items:center;">
             <select id="voiceSelector" class="mw-select" aria-label="কণ্ঠ নির্বাচন">
@@ -1119,16 +1328,26 @@ if ($fullAccess) {
             <button type="button" class="mw-tool danger" onclick="stopReadingBook()">⏹ বন্ধ</button>
         </div>
 
+        <?php if (!$isPublicView): ?>
         <button type="button" class="mw-tool" onclick="document.execCommand('bold')"><b>B</b></button>
         <button type="button" class="mw-tool" onclick="document.execCommand('italic')"><i>I</i></button>
         <button type="button" class="mw-tool" onclick="document.execCommand('underline')"><u>U</u></button>
         <input type="color" class="mw-color" onchange="document.execCommand('foreColor', false, this.value)" title="লেখার রঙ">
 
         <button type="button" class="mw-tool primary" onclick="savePage()">💾 সেভ করুন</button>
+        <?php endif; ?>
         <button type="button" class="mw-tool" onclick="window.print()">🖨️ প্রিন্ট / PDF</button>
         <a class="mw-tool" href="?id=<?= $id ?>&paper=<?= $paperIdx ?>&chap=<?= $chapIdx ?>&download=1">⬇️ ডাউনলোড<?= $fullAccess ? '' : ' (আনলক অংশ)' ?></a>
         <button type="button" class="mw-tool" onclick="openBookSearch()">🔍 বইয়ের ভিতরে খুঁজুন</button>
+        <?php if (!$isPublicView): ?>
         <button type="button" class="mw-tool" onclick="openMobilePreview()">📱 মোবাইলে দেখুন</button>
+        <a class="mw-tool primary" href="?id=<?= urlencode($id) ?>&paper=<?= urlencode($paperIdx) ?>&chap=<?= $chapIdx ?>&view=public" onclick="return goToPublicView(event, this.href)">🌐 পাবলিক ভিউ</a>
+        <?php else: ?>
+        <button type="button" class="mw-tool" onclick="copyPublicLink()">🔗 লিংক কপি</button>
+        <?php if ($isAdminUser): ?>
+        <a class="mw-tool" href="?id=<?= urlencode($id) ?>&paper=<?= urlencode($paperIdx) ?>&chap=<?= $chapIdx ?>" style="display: none;">✏️ এডিটর</a>
+        <?php endif; ?>
+        <?php endif; ?>
     </div>
 
     <?php if (!$fullAccess): ?>
@@ -1325,6 +1544,22 @@ if ($fullAccess) {
             </aside>
 
             <div class="mw-article-main">
+                <?php if ($isPublicView): ?>
+                <header class="mw-pub-hero">
+                    <div class="mw-pub-hero-meta">
+                        <span class="mw-pub-cat"><?= htmlspecialchars($book['category'] ?? 'গ্রন্থ') ?></span>
+                        <?php if (!empty($book['pages'])): ?>
+                            <span class="mw-pub-stat">📄 <?= htmlspecialchars($book['pages']) ?></span>
+                        <?php endif; ?>
+                        <span class="mw-pub-stat">⏱️ পাঠকাল: ~<?= toBengaliNum($readMinutes) ?> মিনিট</span>
+                        <?php if (!empty($bookNotes)): ?>
+                            <span class="mw-pub-stat">✦ টীকা ও নোট: <?= toBengaliNum(count($bookNotes)) ?>টি</span>
+                        <?php endif; ?>
+                    </div>
+                    <h1 class="mw-pub-hero-title"><?= htmlspecialchars($book['title']) ?></h1>
+                    <p class="mw-pub-hero-sub">লেখক: <b><?= htmlspecialchars($book['author'] ?? '') ?></b><?php if (!empty($currentChapter['title']) && $currentChapter['title'] !== ($book['title'] ?? '')): ?> · <?= htmlspecialchars($currentChapter['title']) ?><?php endif; ?></p>
+                </header>
+                <?php endif; ?>
                 <div class="mw-body <?= $paperIdx !== 'default' ? 'papered' : '' ?>" id="editableContent" contenteditable="false" spellcheck="true">
                     <?= $isHtml ? $bodyHtml : nl2br($bodyHtml) ?>
                 </div>
@@ -1348,12 +1583,15 @@ if ($fullAccess) {
 </div>
 </div>
 
+<?php if ($isAdminUser): ?>
 <!-- এডিট সেভ করার গোপন ফর্ম -->
 <form id="saveForm" method="POST" style="display:none;">
     <input type="hidden" name="save_edit" value="1">
     <input type="hidden" name="edited_title" id="hiddenTitle">
     <input type="hidden" name="edited_content" id="hiddenContent">
+    <input type="hidden" name="redirect_public" id="hiddenRedirectPublic" value="<?= $isPublicView ? '1' : '0' ?>">
 </form>
+<?php endif; ?>
 
 <!-- বইয়ের ভেতরে সার্চ মডাল -->
 <div class="bs-modal" id="bookSearchModal" onclick="if(event.target===this)closeBookSearch()">
@@ -1662,12 +1900,56 @@ function setEditMode(on, btn) {
     if (btn) btn.classList.add('active');
 }
 
-function savePage() {
+window._mwDirty = false;
+(function () {
+    var bodyEl = document.getElementById('editableContent');
+    if (bodyEl) {
+        bodyEl.addEventListener('input', function () {
+            window._mwDirty = true;
+        });
+    }
+})();
+
+function savePage(toPublic) {
+    var form = document.getElementById('saveForm');
+    if (!form) return;
     var titleEl = document.getElementById('editableTitle');
     document.getElementById('hiddenTitle').value = titleEl ? titleEl.innerText : <?= json_encode($currentChapter['title'], JSON_UNESCAPED_UNICODE) ?>;
     document.getElementById('hiddenContent').value = document.getElementById('editableContent').innerHTML;
-    document.getElementById('saveForm').submit();
+    var redirEl = document.getElementById('hiddenRedirectPublic');
+    if (redirEl) redirEl.value = toPublic ? '1' : '0';
+    form.submit();
 }
+
+function goToPublicView(e, href) {
+    if (window._mwDirty) {
+        if (e) e.preventDefault();
+        savePage(true);
+        return false;
+    }
+    return true;
+}
+
+window.showToast = function (msg) {
+    var t = document.getElementById('mwToast');
+    if (!t) return;
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function () { t.classList.remove('show'); }, 2600);
+};
+
+document.addEventListener('DOMContentLoaded', function () {
+    var u = new URL(window.location.href);
+    if (u.searchParams.get('saved') === '1') {
+        var isPub = u.searchParams.get('view') === 'public' || u.searchParams.get('public') === '1';
+        window.showToast(isPub ? '✓ পরিবর্তনগুলো সংরক্ষণ করা হয়েছে এবং পাবলিক ভিউতে যুক্ত হয়েছে' : '✓ পরিবর্তনগুলো সংরক্ষণ করা হয়েছে');
+        u.searchParams.delete('saved');
+        if (window.history && window.history.replaceState) {
+            window.history.replaceState({}, '', u.toString());
+        }
+    }
+});
 
 /* ---------- টেক্সট-টু-স্পিচ (বাংলা ও ইংরেজি) ---------- */
 let speechUtterance = null;
@@ -1745,6 +2027,141 @@ function stopReadingBook() {
 
 window.onbeforeunload = function () { window.speechSynthesis.cancel(); };
 
+function toggleReaderSidebar() {
+    if (document.body.classList.contains('mw-focus')) {
+        toggleFocusMode();
+        return;
+    }
+    var sb = document.getElementById('mwSidebar');
+    if (sb) sb.classList.toggle('open');
+}
+
+<?php if ($isPublicView): ?>
+/* ---------- পাবলিক ভিউ পাঠকবান্ধব কন্ট্রোল ---------- */
+(function () {
+    const FONT_KEY = 'mw_pub_font_size';
+    const THEME_KEY = 'mw_pub_theme';
+    const bnDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+    const toBn = n => String(n).replace(/[0-9]/g, d => bnDigits[+d]);
+
+    let currentFontSize = parseInt(localStorage.getItem(FONT_KEY) || '18', 10);
+    if (isNaN(currentFontSize) || currentFontSize < 14 || currentFontSize > 26) currentFontSize = 18;
+
+    function applyFontSize(sz) {
+        currentFontSize = Math.max(14, Math.min(26, sz));
+        const bodyEl = document.getElementById('editableContent');
+        if (bodyEl) bodyEl.style.fontSize = currentFontSize + 'px';
+        const lbl = document.getElementById('mwFontLabel');
+        if (lbl) lbl.textContent = toBn(currentFontSize);
+        localStorage.setItem(FONT_KEY, String(currentFontSize));
+    }
+    window.adjustReaderFont = function (delta) {
+        applyFontSize(currentFontSize + delta);
+    };
+
+    window.setReaderTheme = function (theme) {
+        document.body.classList.remove('mw-theme-sepia', 'mw-theme-dark');
+        if (theme === 'sepia') document.body.classList.add('mw-theme-sepia');
+        else if (theme === 'dark') document.body.classList.add('mw-theme-dark');
+        else theme = 'day';
+        document.querySelectorAll('[data-theme-btn]').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-theme-btn') === theme);
+        });
+        localStorage.setItem(THEME_KEY, theme);
+    };
+
+    window.toggleFocusMode = function () {
+        const active = document.body.classList.toggle('mw-focus');
+        const btn = document.getElementById('mwFocusBtn');
+        if (btn) {
+            btn.classList.toggle('primary', active);
+            btn.textContent = active ? '📖 সাধারণ' : '📖 ফোকাস';
+        }
+    };
+
+    window.copyPublicLink = function () {
+        const u = new URL(window.location.href);
+        u.searchParams.set('view', 'public');
+        const urlStr = u.toString();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(urlStr).then(() => showToast('✓ পাবলিক লিংক কপি হয়েছে'));
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = urlStr;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            showToast('✓ পাবলিক লিংক কপি হয়েছে');
+        }
+    };
+
+    function updateScrollUI() {
+        const doc = document.documentElement;
+        const maxScroll = Math.max(1, doc.scrollHeight - window.innerHeight);
+        const pct = Math.min(100, Math.max(0, (window.scrollY / maxScroll) * 100));
+        const bar = document.getElementById('mwReadProgressBar');
+        if (bar) bar.style.width = pct.toFixed(1) + '%';
+
+        const backTop = document.getElementById('mwBackTop');
+        if (backTop) backTop.classList.toggle('show', window.scrollY > 420);
+
+        // সক্রিয় সূচিপত্র হাইলাইট (Scroll-Spy)
+        if (typeof tocTargets === 'object' && tocTargets) {
+            let activeKey = null;
+            let bestTop = -Infinity;
+            const threshold = 140;
+            Object.keys(tocTargets).forEach(k => {
+                const el = tocTargets[k];
+                if (!el) return;
+                const top = el.getBoundingClientRect().top;
+                if (top <= threshold && top > bestTop) {
+                    bestTop = top;
+                    activeKey = k;
+                }
+            });
+            if (activeKey) {
+                document.querySelectorAll('.mw-toc-list a.active').forEach(a => a.classList.remove('active'));
+                const targetLink = Array.prototype.find.call(
+                    document.querySelectorAll('.mw-toc-list a[data-key]'),
+                    a => a.getAttribute('data-key') === activeKey
+                );
+                if (targetLink) {
+                    targetLink.classList.add('active');
+                    const sb = document.getElementById('mwSidebar');
+                    if (sb && targetLink.offsetParent !== null) {
+                        const lr = targetLink.getBoundingClientRect();
+                        const sr = sb.getBoundingClientRect();
+                        if (lr.top < sr.top + 40 || lr.bottom > sr.bottom - 40) {
+                            sb.scrollTop += (lr.top - sr.top) - sb.clientHeight / 2 + lr.height / 2;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let scrollTick = false;
+    window.addEventListener('scroll', function () {
+        if (scrollTick) return;
+        scrollTick = true;
+        requestAnimationFrame(function () {
+            scrollTick = false;
+            updateScrollUI();
+        });
+    }, { passive: true });
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && document.body.classList.contains('mw-focus')) {
+            toggleFocusMode();
+        }
+    });
+
+    applyFontSize(currentFontSize);
+    setReaderTheme(localStorage.getItem(THEME_KEY) || 'day');
+    window.addEventListener('load', updateScrollUI);
+})();
+<?php else: ?>
 /* ---------- মোবাইল ভিউ প্রিভিউ (375×812) ---------- */
 function openMobilePreview(targetUrl) {
     const modal = document.getElementById('mobilePreviewModal');
@@ -1767,8 +2184,13 @@ document.addEventListener('keydown', function (e) {
         if (mv && mv.style.display === 'flex') closeMobilePreview();
     }
 });
+<?php endif; ?>
 </script>
 
+<div class="mw-toast" id="mwToast" role="status" aria-live="polite"></div>
+<?php if ($isPublicView): ?>
+<button type="button" class="mw-backtop" id="mwBackTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="উপরে যান" aria-label="উপরে যান">↑</button>
+<?php else: ?>
 <!-- মোবাইল ভিউ প্রিভিউ মডাল -->
 <div class="mv-modal" id="mobilePreviewModal" onclick="if(event.target===this)closeMobilePreview()">
     <div class="mv-box">
@@ -1785,5 +2207,6 @@ document.addEventListener('keydown', function (e) {
         </div>
     </div>
 </div>
+<?php endif; ?>
 </body>
 </html>
