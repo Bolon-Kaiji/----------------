@@ -1111,9 +1111,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             <div class="book-card-actions">
                                 <button class="btn btn-primary btn-read-main" onclick="goRead('<?= htmlspecialchars($bid) ?>','default')">📖 পড়ুন / পুরো বই দেখুন</button>
                                 <a class="btn-read-public" href="read.php?id=<?= urlencode($bid) ?>&paper=default&view=public" title="পাবলিক ভিউ">🌐</a>
-                                <?php if (isAdmin()): ?>
-                                    <button type="button" class="btn-delete-book" onclick="deleteBook('<?= htmlspecialchars($bid) ?>')" title="বই ও এর সাথে যুক্ত সব ফাইল মুছুন">🗑️ ফাইল মুছুন</button>
-                                <?php endif; ?>
                             </div>
                         </div>
                     </div>
