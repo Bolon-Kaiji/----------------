@@ -1923,6 +1923,41 @@ function extractBookNotes($plain, $book = []) {
         .bs-form { padding: 14px 16px 12px; border-bottom: 1px solid var(--wp-border-soft); display: flex; flex-direction: column; gap: 10px; }
         .bs-row { display: flex; align-items: center; gap: 10px; }
         .bs-row label { width: 108px; flex-shrink: 0; font-size: 13.5px; color: var(--wp-ink); font-weight: 600; }
+        .bs-input-wrap { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; }
+        .bs-input-wrap input[type="text"] { width: 100%; padding-right: 30px; }
+        .bs-suggest-toggle {
+            position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+            border: 0; background: transparent; color: var(--wp-muted); cursor: pointer;
+            width: 24px; height: 24px; border-radius: 4px; display: inline-flex;
+            align-items: center; justify-content: center; font-size: 12px; line-height: 1;
+        }
+        .bs-suggest-toggle:hover { background: var(--wp-bg-soft, #f1f5f9); color: var(--accent); }
+        .bs-suggest-list {
+            display: none; position: fixed; z-index: 1008;
+            background: var(--wp-bg, #fff); border: 1px solid var(--wp-border);
+            border-radius: 6px; box-shadow: 0 10px 28px rgba(15, 23, 42, .2);
+            max-height: 220px; overflow-y: auto; padding: 4px 0;
+        }
+        .bs-suggest-list.show { display: block; }
+        .bs-suggest-head {
+            padding: 4px 10px; font-size: 11px; font-weight: 700; color: var(--wp-muted);
+            border-bottom: 1px solid var(--wp-border-soft); background: var(--wp-bg-soft, #f8fafc);
+        }
+        .bs-suggest-item {
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            padding: 6px 10px; cursor: pointer; font-size: 13.5px; color: var(--wp-ink);
+        }
+        .bs-suggest-item:hover, .bs-suggest-item.active {
+            background: color-mix(in srgb, var(--accent) 12%, transparent);
+            color: var(--accent);
+        }
+        .bs-suggest-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+        .bs-suggest-text mark { background: #fef08a; color: #713f12; padding: 0 1px; border-radius: 2px; }
+        .bs-suggest-meta {
+            font-size: 11px; color: var(--wp-muted); background: var(--wp-bg-soft, #f1f5f9);
+            border: 1px solid var(--wp-border-soft); border-radius: 999px;
+            padding: 1px 7px; flex-shrink: 0;
+        }
         .bs-row input[type="text"], .bs-row input[type="number"], .bs-row select { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--wp-border); border-radius: 4px; font-size: 14px; font-family: inherit; background: var(--wp-bg); color: var(--wp-ink); }
         .bs-row input:focus, .bs-row select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); }
         .bs-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
@@ -2652,7 +2687,10 @@ function extractBookNotes($plain, $book = []) {
         <div class="bs-form" id="bsFindReplacePanel">
             <div class="bs-row">
                 <label for="bookSearchInput">কী খুঁজবেন:</label>
-                <input type="text" id="bookSearchInput" placeholder="শব্দ বা বাক্য লিখুন (স্পেসসহ)..." oninput="runBookSearch(this.value)" onkeydown="handleSearchInputKeydown(event, this)">
+                <div class="bs-input-wrap">
+                    <input type="text" id="bookSearchInput" autocomplete="off" placeholder="শব্দ বা বাক্য লিখুন (স্পেসসহ)..." onfocus="onBookSearchInputFocus()" oninput="onBookSearchInputChange(this.value)" onkeydown="handleSearchInputKeydown(event, this)">
+                    <button type="button" class="bs-suggest-toggle" id="bsSuggestToggle" title="পুরো বই থেকে সাজেশন দেখুন" onmousedown="event.preventDefault();toggleBookAutoSuggest()">▾</button>
+                </div>
             </div>
             <?php if (!$isPublicView): ?>
             <div class="bs-row" id="bsReplaceRow" style="display:none;">
@@ -2713,6 +2751,7 @@ function extractBookNotes($plain, $book = []) {
         <div class="bs-resize-handle sw" data-dir="sw" title="আকার পরিবর্তন করুন"></div>
         <div class="bs-resize-handle se" data-dir="se" title="আকার পরিবর্তন করুন"></div>
     </div>
+    <div class="bs-suggest-list" id="bsAutoSuggest" role="listbox" aria-label="পুরো বই থেকে অটো সাজেশন"></div>
 </div>
 
 <div class="mw-search-nav" id="mwSearchNav" aria-label="সার্চ ম্যাচ নেভিগেশন">
@@ -2733,6 +2772,8 @@ const BOOK_ID = <?= json_encode((string)$id, JSON_UNESCAPED_UNICODE) ?>;
 const BOOK_PAPER = <?= json_encode((string)$paperIdx, JSON_UNESCAPED_UNICODE) ?>;
 const BOOK_CHAP = <?= (int)$chapIdx ?>;
 const IS_PUBLIC_VIEW = <?= $isPublicView ? 'true' : 'false' ?>;
+const BOOK_TOC = <?= json_encode($toc ?? [], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
+const BOOK_APPENDIX_TOC = <?= json_encode($appendixToc ?? [], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
 let searchQuery = '';
 let _searchHitIdx = -1;
 let _searchDomDirty = false;
@@ -3227,11 +3268,16 @@ function switchSearchTab(tab) {
     const btnPrev = document.getElementById('bsBtnFindPrev');
 
     if (tab === 'goto') {
+        hideBookAutoSuggest();
         if (frPanel) frPanel.style.display = 'none';
         if (resultsEl) resultsEl.style.display = 'none';
         if (gotoPanel) gotoPanel.classList.add('show');
-        ensureBookChaptersLoaded(updateGotoInputs);
+        populateGotoTypeOptions(false);
         updateGotoInputs();
+        ensureBookChaptersLoaded(function () {
+            populateGotoTypeOptions(true);
+            updateGotoInputs();
+        });
     } else {
         if (frPanel) frPanel.style.display = 'flex';
         if (resultsEl) resultsEl.style.display = 'block';
@@ -3289,6 +3335,7 @@ function openBookSearch(initialTab) {
 
 function closeBookSearch() {
     _openFirstResultWhenLoaded = false;
+    hideBookAutoSuggest();
     document.getElementById('bookSearchModal').style.display = 'none';
 }
 
@@ -3502,6 +3549,75 @@ function getGotoHeadings() {
     return Array.prototype.slice.call(body.querySelectorAll('h1, h2, h3, h4, .mw-chapter-title, .mw-sub-title'));
 }
 
+function populateGotoTypeOptions(forceRefresh) {
+    const typeEl = document.getElementById('bsGotoType');
+    if (!typeEl) return;
+    if (!forceRefresh && typeEl.dataset.populated === '1') return;
+
+    const prevVal = typeEl.value;
+    typeEl.innerHTML = '';
+
+    const hasToc = Array.isArray(BOOK_TOC) && BOOK_TOC.length > 0;
+    const hasChapters = Array.isArray(BOOK_CHAPTERS) && BOOK_CHAPTERS.length > 0;
+
+    if (hasToc) {
+        BOOK_TOC.forEach(function (ch, ci) {
+            const opt = document.createElement('option');
+            opt.value = 'toc-chap-' + ci;
+            opt.textContent = (ci + 1) + '. ' + (ch.title || ('অধ্যায় ' + (ci + 1)));
+            typeEl.appendChild(opt);
+        });
+        if (Array.isArray(BOOK_APPENDIX_TOC) && BOOK_APPENDIX_TOC.length > 0) {
+            const opt = document.createElement('option');
+            opt.value = 'toc-appendix';
+            opt.textContent = 'পরিশিষ্ট (Appendix)';
+            typeEl.appendChild(opt);
+        }
+    } else if (hasChapters) {
+        BOOK_CHAPTERS.forEach(function (ch) {
+            const idx = Number(ch.idx);
+            const opt = document.createElement('option');
+            opt.value = 'book-chap-' + idx;
+            opt.textContent = (idx + 1) + '. ' + (ch.title || ('অধ্যায় ' + (idx + 1)));
+            typeEl.appendChild(opt);
+        });
+    } else {
+        const opt = document.createElement('option');
+        opt.value = 'book-chap-' + BOOK_CHAP;
+        opt.textContent = 'অধ্যায় লোড হচ্ছে...';
+        typeEl.appendChild(opt);
+    }
+
+    const optPara = document.createElement('option');
+    optPara.value = 'paragraph';
+    optPara.textContent = 'অনুচ্ছেদ (Paragraph)';
+    typeEl.appendChild(optPara);
+
+    const optHead = document.createElement('option');
+    optHead.value = 'heading';
+    optHead.textContent = 'শিরোনাম (Heading)';
+    typeEl.appendChild(optHead);
+
+    let restored = false;
+    if (prevVal) {
+        for (let i = 0; i < typeEl.options.length; i++) {
+            if (typeEl.options[i].value === prevVal) {
+                typeEl.value = prevVal;
+                restored = true;
+                break;
+            }
+        }
+    }
+    if (!restored) {
+        if (hasToc) {
+            typeEl.value = 'toc-chap-0';
+        } else if (hasChapters) {
+            typeEl.value = 'book-chap-' + BOOK_CHAP;
+        }
+    }
+    typeEl.dataset.populated = '1';
+}
+
 function updateGotoInputs() {
     const typeEl = document.getElementById('bsGotoType');
     const numRow = document.getElementById('bsGotoNumberRow');
@@ -3511,6 +3627,10 @@ function updateGotoInputs() {
     const btnPrev = document.getElementById('bsBtnGotoPrev');
     const statusEl = document.getElementById('bsGotoStatus');
     if (!typeEl || !selInp) return;
+
+    if (typeEl.dataset.populated !== '1') {
+        populateGotoTypeOptions(false);
+    }
 
     const kind = typeEl.value;
     if (statusEl) statusEl.textContent = '';
@@ -3546,34 +3666,112 @@ function updateGotoInputs() {
             });
         }
         if (statusEl) statusEl.textContent = 'মোট শিরোনাম: ' + heads.length;
-    } else {
+    } else if (kind.indexOf('toc-chap-') === 0) {
+        const ci = parseInt(kind.slice(9), 10);
+        const ch = (Array.isArray(BOOK_TOC) && BOOK_TOC[ci]) ? BOOK_TOC[ci] : null;
+        const subs = (ch && Array.isArray(ch.subs)) ? ch.subs : [];
         if (numRow) numRow.style.display = 'none';
         if (selRow) selRow.style.display = 'flex';
         if (btnPrev) btnPrev.style.display = 'none';
         selInp.innerHTML = '';
-        if (Array.isArray(BOOK_CHAPTERS) && BOOK_CHAPTERS.length) {
-            BOOK_CHAPTERS.forEach(function (ch) {
+        if (subs.length) {
+            subs.forEach(function (sh, si) {
                 const opt = document.createElement('option');
-                opt.value = String(ch.idx);
-                opt.textContent = (Number(ch.idx) + 1) + '. ' + (ch.title || ('অধ্যায় ' + (Number(ch.idx) + 1)));
-                if (Number(ch.idx) === Number(BOOK_CHAP)) opt.selected = true;
+                opt.value = 'toc-sub-' + ci + '-' + si;
+                const txt = String(sh || '').replace(/\s+/g, ' ').trim();
+                opt.textContent = (si + 1) + '. ' + (txt.length > 75 ? txt.slice(0, 75) + '…' : txt);
                 selInp.appendChild(opt);
             });
+            if (statusEl) statusEl.textContent = 'মোট উপশিরোনাম: ' + subs.length;
         } else {
             const opt = document.createElement('option');
-            opt.value = String(BOOK_CHAP);
-            opt.textContent = 'অধ্যায় লোড হচ্ছে...';
+            opt.value = 'toc-chap-' + ci;
+            opt.textContent = 'অধ্যায়ের শুরু (' + (ch ? ch.title : '') + ')';
             selInp.appendChild(opt);
+            if (statusEl) statusEl.textContent = 'এই অধ্যায়ে কোনো উপশিরোনাম নেই';
+        }
+    } else if (kind === 'toc-appendix') {
+        const apps = Array.isArray(BOOK_APPENDIX_TOC) ? BOOK_APPENDIX_TOC : [];
+        if (numRow) numRow.style.display = 'none';
+        if (selRow) selRow.style.display = 'flex';
+        if (btnPrev) btnPrev.style.display = 'none';
+        selInp.innerHTML = '';
+        apps.forEach(function (appTitle, ai) {
+            const opt = document.createElement('option');
+            opt.value = 'toc-app-' + ai;
+            const txt = String(appTitle || '').replace(/\s+/g, ' ').trim();
+            opt.textContent = (ai + 1) + '. ' + (txt.length > 75 ? txt.slice(0, 75) + '…' : txt);
+            selInp.appendChild(opt);
+        });
+        if (statusEl) statusEl.textContent = 'মোট পরিশিষ্ট: ' + apps.length;
+    } else if (kind.indexOf('book-chap-') === 0) {
+        const chapIdx = parseInt(kind.slice(10), 10);
+        if (numRow) numRow.style.display = 'none';
+        if (selRow) selRow.style.display = 'flex';
+        if (btnPrev) btnPrev.style.display = 'none';
+        selInp.innerHTML = '';
+        if (chapIdx === Number(BOOK_CHAP)) {
+            const heads = getGotoHeadings();
+            if (heads.length) {
+                heads.forEach(function (h, i) {
+                    const opt = document.createElement('option');
+                    opt.value = 'head-' + i;
+                    const txt = (h.textContent || '').replace(/\s+/g, ' ').trim();
+                    opt.textContent = (i + 1) + '. ' + (txt.length > 75 ? txt.slice(0, 75) + '…' : txt);
+                    selInp.appendChild(opt);
+                });
+                if (statusEl) statusEl.textContent = 'মোট উপশিরোনাম: ' + heads.length;
+            } else {
+                const opt = document.createElement('option');
+                opt.value = 'chap-nav-' + chapIdx;
+                opt.textContent = 'অধ্যায়ের শুরু';
+                selInp.appendChild(opt);
+                if (statusEl) statusEl.textContent = 'কোনো উপশিরোনাম পাওয়া যায়নি';
+            }
+        } else {
+            const opt = document.createElement('option');
+            opt.value = 'chap-nav-' + chapIdx;
+            opt.textContent = 'অধ্যায়ে যান';
+            selInp.appendChild(opt);
+            if (statusEl) statusEl.textContent = 'অন্য অধ্যায় — যান ক্লিক করলে খুলবে';
         }
     }
 }
 
 function flashGotoElement(el) {
     if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollTargetBelowTopbar(el);
     el.classList.remove('mw-note-flash');
     void el.offsetWidth;
     el.classList.add('mw-note-flash');
+}
+
+function findTocTargetElement(targetId) {
+    if (!targetId) return null;
+    let el = document.getElementById(targetId);
+    if (el) return el;
+    const link = document.querySelector('.mw-toc-list a[data-target="' + targetId + '"]');
+    if (link) {
+        const key = (link.getAttribute('data-key') || '').trim();
+        if (key && typeof tocTargets === 'object' && tocTargets && tocTargets[key]) {
+            return tocTargets[key];
+        }
+    }
+    return null;
+}
+
+function syncSidebarTocActive(targetId) {
+    if (!targetId) return;
+    const link = document.querySelector('.mw-toc-list a[data-target="' + targetId + '"]');
+    if (!link) return;
+    document.querySelectorAll('.mw-toc-list a.active').forEach(function (a) { a.classList.remove('active'); });
+    link.classList.add('active');
+    const chapLi = link.closest('.mw-toc-chapter');
+    if (chapLi && chapLi.classList.contains('collapsed')) {
+        chapLi.classList.remove('collapsed');
+        const caret = chapLi.querySelector('.mw-caret');
+        if (caret) caret.textContent = '▼';
+    }
 }
 
 function stepGoToParagraph(delta) {
@@ -3610,9 +3808,46 @@ function executeGoTo() {
         if (isNaN(idx) || !heads[idx]) return;
         flashGotoElement(heads[idx]);
         if (statusEl) statusEl.textContent = '✓ শিরোনাম ' + (idx + 1) + '-এ যাওয়া হয়েছে';
-    } else {
+    } else if (kind.indexOf('toc-chap-') === 0 || kind === 'toc-appendix') {
         const selInp = document.getElementById('bsGotoSelect');
-        const chapIdx = parseInt(selInp ? selInp.value : '', 10);
+        const targetId = selInp ? selInp.value : '';
+        if (!targetId) return;
+        if (Number(BOOK_CHAP) !== 0) {
+            if (window._mwDirty && !confirm('অধ্যায় পরিবর্তনের আগে আপনার করা পরিবর্তনগুলো সংরক্ষিত হয়নি। সংরক্ষণ না করেই যেতে চান?')) {
+                return;
+            }
+            let href = '?id=' + encodeURIComponent(BOOK_ID) + '&paper=' + encodeURIComponent(BOOK_PAPER) + '&chap=0';
+            if (IS_PUBLIC_VIEW) href += '&view=public';
+            else if (isEditModeActive()) href += '&edit=1';
+            window.location.href = href + '#' + encodeURIComponent(targetId);
+            return;
+        }
+        let targetEl = findTocTargetElement(targetId);
+        if (!targetEl && kind.indexOf('toc-chap-') === 0) {
+            targetEl = findTocTargetElement(kind);
+        }
+        if (targetEl) {
+            flashGotoElement(targetEl);
+            syncSidebarTocActive(targetId);
+            const selOpt = selInp.options[selInp.selectedIndex];
+            const labelTxt = selOpt ? selOpt.textContent : '';
+            if (statusEl) statusEl.textContent = '✓ ' + (labelTxt.length > 45 ? labelTxt.slice(0, 45) + '…' : labelTxt);
+        } else {
+            if (statusEl) statusEl.textContent = 'নির্বাচিত উপশিরোনামটি পৃষ্ঠায় পাওয়া যায়নি।';
+        }
+    } else if (kind.indexOf('book-chap-') === 0) {
+        const selInp = document.getElementById('bsGotoSelect');
+        const val = selInp ? selInp.value : '';
+        if (val.indexOf('head-') === 0) {
+            const hi = parseInt(val.slice(5), 10);
+            const heads = getGotoHeadings();
+            if (!isNaN(hi) && heads[hi]) {
+                flashGotoElement(heads[hi]);
+                if (statusEl) statusEl.textContent = '✓ উপশিরোনাম ' + (hi + 1) + '-এ যাওয়া হয়েছে';
+            }
+            return;
+        }
+        const chapIdx = parseInt(kind.slice(10), 10);
         if (isNaN(chapIdx)) return;
         if (chapIdx === Number(BOOK_CHAP)) {
             closeBookSearch();
@@ -3713,15 +3948,311 @@ function runBookSearch(q) {
     }
 }
 
+let _bookSuggestWordIndex = null;
+let _bookSuggestTocItems = null;
+let _bsSuggestItems = [];
+let _bsSuggestActiveIdx = -1;
+
+function buildBookSuggestIndex() {
+    if (_bookSuggestTocItems === null) {
+        const tocSet = new Set();
+        const tocArr = [];
+        if (Array.isArray(BOOK_TOC)) {
+            BOOK_TOC.forEach(function (ch) {
+                const t = String((ch && ch.title) || '').replace(/\s+/g, ' ').trim();
+                if (t && !tocSet.has(t)) {
+                    tocSet.add(t);
+                    tocArr.push({ text: t, norm: t.toLocaleLowerCase(), type: 'অধ্যায়' });
+                }
+                if (ch && Array.isArray(ch.subs)) {
+                    ch.subs.forEach(function (sh) {
+                        const s = String(sh || '').replace(/\s+/g, ' ').trim();
+                        if (s && !tocSet.has(s)) {
+                            tocSet.add(s);
+                            tocArr.push({ text: s, norm: s.toLocaleLowerCase(), type: 'উপশিরোনাম' });
+                        }
+                    });
+                }
+            });
+        }
+        if (Array.isArray(BOOK_APPENDIX_TOC)) {
+            BOOK_APPENDIX_TOC.forEach(function (app) {
+                const a = String(app || '').replace(/\s+/g, ' ').trim();
+                if (a && !tocSet.has(a)) {
+                    tocSet.add(a);
+                    tocArr.push({ text: a, norm: a.toLocaleLowerCase(), type: 'পরিশিষ্ট' });
+                }
+            });
+        }
+        _bookSuggestTocItems = tocArr;
+    }
+
+    if (_bookSuggestWordIndex === null && Array.isArray(BOOK_CHAPTERS)) {
+        const freq = Object.create(null);
+        const orig = Object.create(null);
+        const tokenRe = /[^\s.,;:!?'"()\[\]{}<>\/\\|।॥\-–—=+*&^%$#@~`]+/g;
+        for (let ci = 0; ci < BOOK_CHAPTERS.length; ci++) {
+            const txt = BOOK_CHAPTERS[ci].plain || '';
+            let m;
+            tokenRe.lastIndex = 0;
+            while ((m = tokenRe.exec(txt)) !== null) {
+                const w = m[0];
+                if (w.length < 2) continue;
+                const norm = w.toLocaleLowerCase();
+                if (!freq[norm]) {
+                    freq[norm] = 1;
+                    orig[norm] = w;
+                } else {
+                    freq[norm]++;
+                }
+            }
+        }
+        const arr = [];
+        const keys = Object.keys(freq);
+        for (let i = 0; i < keys.length; i++) {
+            const k = keys[i];
+            arr.push({ text: orig[k], norm: k, count: freq[k] });
+        }
+        arr.sort(function (a, b) { return b.count - a.count; });
+        _bookSuggestWordIndex = arr;
+    }
+}
+
+function getBookAutoSuggestions(rawQ) {
+    buildBookSuggestIndex();
+    const q = String(rawQ == null ? '' : rawQ).replace(/\s+/g, ' ').trim();
+    const needle = q.toLocaleLowerCase();
+    const results = [];
+    const seen = new Set();
+
+    if (!needle) {
+        if (Array.isArray(_bookSuggestTocItems)) {
+            for (let i = 0; i < _bookSuggestTocItems.length && results.length < 10; i++) {
+                const item = _bookSuggestTocItems[i];
+                if (!seen.has(item.norm)) {
+                    seen.add(item.norm);
+                    results.push({ text: item.text, meta: item.type });
+                }
+            }
+        }
+        if (Array.isArray(_bookSuggestWordIndex)) {
+            for (let i = 0; i < _bookSuggestWordIndex.length && results.length < 16; i++) {
+                const w = _bookSuggestWordIndex[i];
+                if (w.text.length >= 3 && !seen.has(w.norm)) {
+                    seen.add(w.norm);
+                    results.push({ text: w.text, meta: w.count + ' বার' });
+                }
+            }
+        }
+        return results;
+    }
+
+    if (Array.isArray(_bookSuggestTocItems)) {
+        for (let i = 0; i < _bookSuggestTocItems.length && results.length < 5; i++) {
+            const item = _bookSuggestTocItems[i];
+            if (item.norm.indexOf(needle) !== -1 && !seen.has(item.norm)) {
+                seen.add(item.norm);
+                results.push({ text: item.text, meta: item.type });
+            }
+        }
+    }
+
+    if (needle.indexOf(' ') !== -1 && Array.isArray(BOOK_CHAPTERS)) {
+        const phraseMap = Object.create(null);
+        const phraseOrig = Object.create(null);
+        for (let ci = 0; ci < BOOK_CHAPTERS.length; ci++) {
+            const txt = BOOK_CHAPTERS[ci].plain || '';
+            const lower = txt.toLocaleLowerCase();
+            let from = 0;
+            let guard = 0;
+            while (guard < 80) {
+                const pos = lower.indexOf(needle, from);
+                if (pos === -1) break;
+                guard++;
+                const slice = txt.slice(pos, Math.min(txt.length, pos + q.length + 32));
+                const cleaned = slice.split(/[\r\n।॥.?!;]/)[0].trim();
+                const words = cleaned.split(/\s+/).slice(0, q.split(/\s+/).length + 2).join(' ');
+                if (words && words.length >= q.length) {
+                    const wn = words.toLocaleLowerCase();
+                    phraseMap[wn] = (phraseMap[wn] || 0) + 1;
+                    if (!phraseOrig[wn]) phraseOrig[wn] = words;
+                }
+                from = pos + needle.length;
+            }
+        }
+        const phraseKeys = Object.keys(phraseMap).sort(function (a, b) { return phraseMap[b] - phraseMap[a]; });
+        for (let i = 0; i < phraseKeys.length && results.length < 15; i++) {
+            const pk = phraseKeys[i];
+            if (!seen.has(pk)) {
+                seen.add(pk);
+                results.push({ text: phraseOrig[pk], meta: phraseMap[pk] + ' বার' });
+            }
+        }
+    } else if (Array.isArray(_bookSuggestWordIndex)) {
+        const containsMatches = [];
+        for (let i = 0; i < _bookSuggestWordIndex.length && results.length < 15; i++) {
+            const w = _bookSuggestWordIndex[i];
+            if (seen.has(w.norm)) continue;
+            const idx = w.norm.indexOf(needle);
+            if (idx === 0) {
+                seen.add(w.norm);
+                results.push({ text: w.text, meta: w.count + ' বার' });
+            } else if (idx > 0 && containsMatches.length < 10) {
+                containsMatches.push(w);
+            }
+        }
+        for (let i = 0; i < containsMatches.length && results.length < 15; i++) {
+            const w = containsMatches[i];
+            if (!seen.has(w.norm)) {
+                seen.add(w.norm);
+                results.push({ text: w.text, meta: w.count + ' বার' });
+            }
+        }
+    }
+    return results;
+}
+
+function positionBookAutoSuggest() {
+    const inp = document.getElementById('bookSearchInput');
+    const box = document.getElementById('bsAutoSuggest');
+    if (!inp || !box) return;
+    const rect = inp.getBoundingClientRect();
+    box.style.left = Math.max(8, rect.left) + 'px';
+    box.style.top = Math.min(window.innerHeight - 80, rect.bottom + 3) + 'px';
+    box.style.width = Math.max(200, rect.width) + 'px';
+}
+
+function hideBookAutoSuggest() {
+    const box = document.getElementById('bsAutoSuggest');
+    if (box) {
+        box.classList.remove('show');
+        box.innerHTML = '';
+    }
+    _bsSuggestItems = [];
+    _bsSuggestActiveIdx = -1;
+}
+
+function renderBookAutoSuggest(q) {
+    const box = document.getElementById('bsAutoSuggest');
+    const modal = document.getElementById('bookSearchModal');
+    if (!box || !modal || modal.style.display === 'none' || _activeSearchTab === 'goto') {
+        hideBookAutoSuggest();
+        return;
+    }
+    if (BOOK_CHAPTERS === null) {
+        positionBookAutoSuggest();
+        box.innerHTML = '<div class="bs-suggest-head">পুরো বইয়ের তথ্য লোড হচ্ছে...</div>';
+        box.classList.add('show');
+        ensureBookChaptersLoaded(function () {
+            const inp = document.getElementById('bookSearchInput');
+            renderBookAutoSuggest(inp ? inp.value : q);
+        });
+        return;
+    }
+    const items = getBookAutoSuggestions(q);
+    _bsSuggestItems = items;
+    _bsSuggestActiveIdx = -1;
+    if (!items.length) {
+        hideBookAutoSuggest();
+        return;
+    }
+    const cleanQ = String(q == null ? '' : q).trim();
+    const headLabel = cleanQ ? 'পুরো বই থেকে সাজেশন (' + items.length + ')' : 'পুরো বই থেকে দ্রুত খুঁজুন';
+    let html = '<div class="bs-suggest-head">' + headLabel + '</div>';
+    const escRe = cleanQ ? new RegExp(cleanQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi') : null;
+    items.forEach(function (it, idx) {
+        let disp = escapeHtml(it.text);
+        if (escRe) {
+            disp = disp.replace(escRe, '<mark>$&</mark>');
+        }
+        html += '<div class="bs-suggest-item" role="option" data-idx="' + idx + '" onmousedown="event.preventDefault();applyBookAutoSuggestion(' + idx + ')">'
+            + '<span class="bs-suggest-text">' + disp + '</span>'
+            + '<span class="bs-suggest-meta">' + escapeHtml(it.meta) + '</span>'
+            + '</div>';
+    });
+    box.innerHTML = html;
+    positionBookAutoSuggest();
+    box.classList.add('show');
+}
+
+function applyBookAutoSuggestion(idx) {
+    const item = _bsSuggestItems[idx];
+    if (!item) return;
+    const inp = document.getElementById('bookSearchInput');
+    if (inp) {
+        inp.value = item.text;
+        inp.focus();
+    }
+    hideBookAutoSuggest();
+    runBookSearch(item.text);
+}
+
+function toggleBookAutoSuggest() {
+    const box = document.getElementById('bsAutoSuggest');
+    const inp = document.getElementById('bookSearchInput');
+    if (box && box.classList.contains('show')) {
+        hideBookAutoSuggest();
+        return;
+    }
+    if (inp) inp.focus();
+    renderBookAutoSuggest(inp ? inp.value : '');
+}
+
+function onBookSearchInputFocus() {
+    const inp = document.getElementById('bookSearchInput');
+    renderBookAutoSuggest(inp ? inp.value : '');
+}
+
+function onBookSearchInputChange(val) {
+    runBookSearch(val);
+    renderBookAutoSuggest(val);
+}
+
 function handleSearchInputKeydown(e, inputEl) {
+    const box = document.getElementById('bsAutoSuggest');
+    const isSuggestOpen = !!(box && box.classList.contains('show') && _bsSuggestItems.length > 0);
+    if (e.key === 'ArrowDown' && isSuggestOpen) {
+        e.preventDefault();
+        _bsSuggestActiveIdx = (_bsSuggestActiveIdx + 1) % _bsSuggestItems.length;
+        updateSuggestActiveClass();
+        return;
+    }
+    if (e.key === 'ArrowUp' && isSuggestOpen) {
+        e.preventDefault();
+        _bsSuggestActiveIdx = (_bsSuggestActiveIdx <= 0 ? _bsSuggestItems.length - 1 : _bsSuggestActiveIdx - 1);
+        updateSuggestActiveClass();
+        return;
+    }
+    if (e.key === 'Escape' && isSuggestOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        hideBookAutoSuggest();
+        return;
+    }
     if (e.key === 'Enter') {
         e.preventDefault();
+        if (isSuggestOpen && _bsSuggestActiveIdx >= 0 && _bsSuggestItems[_bsSuggestActiveIdx]) {
+            applyBookAutoSuggestion(_bsSuggestActiveIdx);
+            return;
+        }
+        hideBookAutoSuggest();
         if (inputEl && inputEl.value !== searchQuery) {
             runBookSearch(inputEl.value);
         } else {
             findNextFromModal();
         }
     }
+}
+
+function updateSuggestActiveClass() {
+    const box = document.getElementById('bsAutoSuggest');
+    if (!box) return;
+    const rows = box.querySelectorAll('.bs-suggest-item');
+    rows.forEach(function (el, i) {
+        const active = (i === _bsSuggestActiveIdx);
+        el.classList.toggle('active', active);
+        if (active) el.scrollIntoView({ block: 'nearest' });
+    });
 }
 
 function handleSearchResultClick(e, chapIdx, href) {
@@ -3834,8 +4365,25 @@ function selectQueryOnLoad() {
     jumpToQueryInDocument(q);
 }
 
+document.addEventListener('mousedown', function (e) {
+    const box = document.getElementById('bsAutoSuggest');
+    if (!box || !box.classList.contains('show')) return;
+    if (e.target && (e.target.closest('.bs-input-wrap') || e.target.closest('#bsAutoSuggest'))) return;
+    hideBookAutoSuggest();
+});
+
+window.addEventListener('resize', function () {
+    const box = document.getElementById('bsAutoSuggest');
+    if (box && box.classList.contains('show')) positionBookAutoSuggest();
+});
+
 document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
+        const box = document.getElementById('bsAutoSuggest');
+        if (box && box.classList.contains('show')) {
+            hideBookAutoSuggest();
+            return;
+        }
         closeBookSearch();
         return;
     }
