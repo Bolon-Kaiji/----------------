@@ -9,6 +9,7 @@ foreach ($dirs as $dir) {
     if (!is_dir($absDir)) mkdir($absDir, 0777, true);
 }
 $books = loadBooks();
+$trash = loadTrash();
 $message = '';
 
 // .doc / .docx ফাইল থেকে লেখা পড়ার হেল্পার ফাংশন
@@ -252,6 +253,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $authorPath = uploadFile('author_img', 'uploads/authors', 'author');
     $fullBookPath = uploadFile('full_book_file', 'uploads/books', 'fullbook');
 
+    // টেমপ্লেট বই থেকে ডিফল্ট লেখকের ছবি, ৫টি কাগজ ও গ্রন্থপরিচিতি নেওয়া (যাতে নতুন বইয়ে অটোমেটিক সেট হয়)
+    $templateBook = !empty($books) ? reset($books) : [];
+    if ($authorPath === '') {
+        if (!empty($templateBook['author_img']) && is_file(__DIR__ . '/' . $templateBook['author_img'])) {
+            $authorPath = $templateBook['author_img'];
+        } else {
+            $foundAuthors = glob(__DIR__ . '/uploads/authors/author_*') ?: [];
+            if (!empty($foundAuthors)) {
+                $authorPath = 'uploads/authors/' . basename($foundAuthors[0]);
+            }
+        }
+    }
+
     // যদি পুরো বইয়ের .doc/.docx/.txt/.md ফাইল আপলোড করা হয়, তবে স্বয়ংক্রিয়ভাবে লেখা পড়ে নেবে
     $plainContent = '';
     if ($fullBookPath) {
@@ -291,12 +305,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $plainContent = strip_tags($content);
     }
 
-    // ৫টি পড়ার কাগজের টেক্সচার আপলোড
+    // ৫টি পড়ার কাগজের টেক্সচার আপলোড (নতুন ছবি না দিলে আগের ৫টি কাগজের ছবি অটোমেটিক সেট হবে)
     $papers = [];
+    $templatePapers = is_array($templateBook['papers'] ?? null) ? $templateBook['papers'] : [];
     for ($i = 1; $i <= 5; $i++) {
         $pPath = uploadFile("paper_$i", 'uploads/papers', "paper{$i}");
-        $pName = !empty($_POST["paper_name_$i"]) ? htmlspecialchars($_POST["paper_name_$i"]) : "কাগজ $i";
-        $pFontColor = !empty($_POST["paper_color_$i"]) ? htmlspecialchars($_POST["paper_color_$i"]) : "#111111";
+        if ($pPath === '') {
+            $tplPaper = $templatePapers[$i - 1] ?? null;
+            if (!empty($tplPaper['image']) && is_file(__DIR__ . '/' . $tplPaper['image'])) {
+                $pPath = $tplPaper['image'];
+            } else {
+                $foundPapers = glob(__DIR__ . "/uploads/papers/paper{$i}_*") ?: [];
+                if (!empty($foundPapers)) {
+                    $pPath = 'uploads/papers/' . basename($foundPapers[0]);
+                }
+            }
+        }
+        $pName = !empty($_POST["paper_name_$i"]) ? htmlspecialchars($_POST["paper_name_$i"]) : ($templatePapers[$i - 1]['name'] ?? "কাগজ $i");
+        $pFontColor = !empty($_POST["paper_color_$i"]) ? htmlspecialchars($_POST["paper_color_$i"]) : ($templatePapers[$i - 1]['textColor'] ?? "#111111");
         if ($pPath) {
             $papers[] = ['name' => $pName, 'image' => $pPath, 'textColor' => $pFontColor];
         }
@@ -305,7 +331,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (trim($content) === '') {
         $message = "বই আপলোড হয়নি — বিষয়বস্তু খালি। অনুগ্রহ করে লেখা লিখুন অথবা সম্পূর্ণ বইয়ের ফাইল (.doc/.docx) আপলোড করুন।";
     } else {
-        addBook($id, [
+        $newMeta = [
             'id' => $id,
             'title' => $title,
             'author' => $author,
@@ -317,7 +343,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             'author_img' => $authorPath,
             'full_book_file' => $fullBookPath,
             'papers' => $papers,
-        ], [
+        ];
+        if (!empty($templateBook['colophon']) && is_array($templateBook['colophon'])) {
+            $colophon = $templateBook['colophon'];
+            $colophon['book_title'] = $title;
+            $colophon['author'] = $author;
+            $newMeta['colophon'] = $colophon;
+        } else {
+            $newMeta['colophon'] = [
+                'book_title' => $title,
+                'logo' => 'uploads/books/samachar_logo.png',
+                'author' => $author,
+                'publisher' => 'মোঃ শাহ্ আলম সরকার',
+                'publishing_house' => 'সমাচার',
+                'address' => '৩৭ পি. কে. রায় রোড, বাংলাবাজার, ঢাকা',
+                'phones' => ['০২-৪৭১১৬১৪৩', '০১৭৩৫-৬৭৪৬৫৭'],
+                'editions' => [],
+                'credits' => [],
+                'distributors' => [],
+                'price_bdt' => $price,
+                'price_usd' => '',
+                'isbn' => '',
+            ];
+        }
+        addBook($id, $newMeta, [
             ['title' => $chapter_title, 'content' => $content, 'plain' => $plainContent]
         ]);
         $books = loadBooks();
@@ -333,6 +382,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $books[$id]['access'] = htmlspecialchars($_POST['new_access']);
         saveBooks($books);
         $message = "বইয়ের মূল্য ও অ্যাক্সেস আপডেট করা হয়েছে!";
+    }
+}
+
+// নির্দিষ্ট বই রিসাইকেল বিনে (ফাইল মুছুন) পাঠানো — কোনো ফাইল/ডেটা হারাবে না
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_book') {
+    if (!isAdmin()) {
+        $message = "এই কাজটি করার অনুমতি নেই।";
+    } else {
+        $id = trim((string)($_POST['book_id'] ?? ''));
+        $res = softDeleteBook($id);
+        if ($res['ok']) {
+            $books = loadBooks();
+            $trash = loadTrash();
+            $safeTitle = htmlspecialchars($res['title'], ENT_QUOTES, 'UTF-8');
+            $message = "'{$safeTitle}' বইটি রিসাইকেল বিনে (ফাইল মুছুন) সংরক্ষণ করা হয়েছে। প্রয়োজনে 'বই রিলোড' বাটনে ক্লিক করে অবিকল ফিরিয়ে আনতে পারবেন।";
+        } else {
+            $message = "বইটি খুঁজে পাওয়া যায়নি বা আগেই সরানো হয়েছে।";
+        }
+    }
+}
+
+// রিসাইকেল বিন থেকে বইটি অবিকল ও হুবহু ফিরিয়ে আনা (বই রিলোড)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'restore_book') {
+    if (!isAdmin()) {
+        $message = "এই কাজটি করার অনুমতি নেই।";
+    } else {
+        $id = trim((string)($_POST['book_id'] ?? ''));
+        $res = restoreBook($id);
+        if ($res['ok']) {
+            $books = loadBooks();
+            $trash = loadTrash();
+            $safeTitle = htmlspecialchars($res['title'], ENT_QUOTES, 'UTF-8');
+            $message = "সফলভাবে '{$safeTitle}' বইটি অবিকল ও হুবহু (একটি ডটও না হারিয়ে) রিলোড করা হয়েছে!";
+        } else {
+            $message = "রিসাইকেল বিনে বইটি খুঁজে পাওয়া যায়নি।";
+        }
+    }
+}
+
+// রিসাইকেল বিন থেকে চিরতরে মোছা (শুধুমাত্র ব্যবহারকারী চাইলে)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'permanent_delete_book') {
+    if (!isAdmin()) {
+        $message = "এই কাজটি করার অনুমতি নেই।";
+    } else {
+        $id = trim((string)($_POST['book_id'] ?? ''));
+        $res = deleteBook($id, __DIR__);
+        if ($res['ok']) {
+            $books = loadBooks();
+            $trash = loadTrash();
+            $safeTitle = htmlspecialchars($res['title'], ENT_QUOTES, 'UTF-8');
+            $count = (int)$res['deleted_files'];
+            $message = "'{$safeTitle}' বইটি এবং এর {$count}টি ফাইল চিরতরে মুছে ফেলা হয়েছে। (৫টি কাগজের ছবি, লেখকের ছবি ও মূল ফোল্ডার অক্ষত রয়েছে।)";
+        } else {
+            $message = "বইটি খুঁজে পাওয়া যায়নি বা আগেই চিরতরে মুছে ফেলা হয়েছে।";
+        }
     }
 }
 
@@ -556,7 +660,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             border: 2px solid #f59e0b;
         }
         .book-card-actions {
-            display: flex; gap: 8px; margin-top: 12px;
+            display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
         }
         .book-card-actions .btn-read-main {
             flex: 1 1 auto;
@@ -577,6 +681,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             transition: background 0.15s ease;
         }
         .book-card-actions .btn-read-public:hover { background: #dbeafe; }
+        .book-card-actions .btn-delete-book {
+            width: 100%;
+            padding: 8px 12px;
+            border-radius: 8px;
+            background: #fef2f2;
+            color: #b91c1c;
+            border: 1px solid #fecaca;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .book-card-actions .btn-delete-book:hover {
+            background: #fee2e2;
+            border-color: #f87171;
+        }
+        .fullbook-file-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .fullbook-file-row input[type="file"] {
+            flex: 1 1 240px;
+        }
+        .btn-clear-file {
+            padding: 9px 14px;
+            border-radius: 6px;
+            background: #fef2f2;
+            color: #b91c1c;
+            border: 1px solid #fecaca;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .btn-clear-file:hover {
+            background: #fee2e2;
+            border-color: #f87171;
+        }
+        .btn-reload-book {
+            padding: 9px 14px;
+            border-radius: 6px;
+            background: #ecfdf5;
+            color: #047857;
+            border: 1px solid #a7f3d0;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .btn-reload-book:hover {
+            background: #d1fae5;
+            border-color: #34d399;
+        }
+        .trash-list {
+            margin-top: 16px;
+            text-align: left;
+            max-height: 380px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .trash-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            background: #f8fafc;
+            flex-wrap: wrap;
+        }
+        .trash-item-info strong { display: block; color: #0f172a; font-size: 15px; }
+        .trash-item-info small { color: #64748b; font-size: 12px; }
+        .trash-item-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .fullbook-file-status {
+            margin-top: 6px;
+            font-size: 12.5px;
+            color: #64748b;
+        }
 
         /* পপআপ মডাল */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.65); backdrop-filter: blur(4px); justify-content: center; align-items: center; z-index: 1000; }
@@ -725,7 +914,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <div class="highlight-upload">
                 <div class="form-group">
                     <label>সম্পূর্ণ বইয়ের ফাইল (.doc / .docx) — আপলোড করলে লেখা স্বয়ংক্রিয়ভাবে যুক্ত হবে</label>
-                    <input type="file" name="full_book_file" accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+                    <div class="fullbook-file-row">
+                        <input type="file" id="fullBookFileInput" name="full_book_file" accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onchange="updateFullBookFileUi()">
+                        <button type="button" id="clearFullBookFileBtn" class="btn-clear-file" onclick="clearFullBookFile()">🗑️ ফাইল মুছুন</button>
+                        <button type="button" id="reloadBookUploadBtn" class="btn-reload-book" onclick="handleUploadBoxReload()">🔄 বই রিলোড<?= !empty($trash) ? ' (' . count($trash) . ')' : '' ?></button>
+                    </div>
+                    <div id="fullBookFileStatus" class="fullbook-file-status">কোনো ফাইল নির্বাচিত নেই।</div>
                 </div>
             </div>
 
@@ -872,6 +1066,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     <option value="সাবস্ক্রিপশন">সাবস্ক্রিপশন</option>
                     <option value="প্রিমিয়াম">প্রিমিয়াম</option>
                 </select>
+                <?php if (isAdmin()): ?>
+                    <button type="button" class="btn-reload-book" onclick="openTrashModal()" title="রিসাইকেল বিন থেকে মুছে ফেলা বই অবিকল ফিরিয়ে আনুন">🔄 বই রিলোড<?= !empty($trash) ? ' (' . count($trash) . ')' : '' ?></button>
+                <?php endif; ?>
             </div>
         </div>
         <div class="book-grid" id="bookGrid">
@@ -914,6 +1111,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             <div class="book-card-actions">
                                 <button class="btn btn-primary btn-read-main" onclick="goRead('<?= htmlspecialchars($bid) ?>','default')">📖 পড়ুন / পুরো বই দেখুন</button>
                                 <a class="btn-read-public" href="read.php?id=<?= urlencode($bid) ?>&paper=default&view=public" title="পাবলিক ভিউ">🌐</a>
+                                <?php if (isAdmin()): ?>
+                                    <button type="button" class="btn-delete-book" onclick="deleteBook('<?= htmlspecialchars($bid) ?>')" title="বই ও এর সাথে যুক্ত সব ফাইল মুছুন">🗑️ ফাইল মুছুন</button>
+                                <?php endif; ?>
                             </div>
                         </div>
                     </div>
@@ -933,6 +1133,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     </div>
 </div>
 
+<!-- রিসাইকেল বিন / বই রিলোড মডাল -->
+<div class="modal" id="trashModal">
+    <div class="modal-content">
+        <span class="close-modal" onclick="closeTrashModal()">&times;</span>
+        <h2>🔄 বই রিলোড ও রিসাইকেল বিন</h2>
+        <p style="color:#475569; font-size:13.5px; margin:6px 0 0;">এখানে 'ফাইল মুছুন' দিয়ে সরানো বইগুলো সেভ থাকে। <b>বই রিলোড</b> চাপলে বইটি একটি ডটও না হারিয়ে অবিকল ফিরে আসবে; আর চাইলে এখান থেকেই চিরতরে মুছতে পারবেন।</p>
+        <div class="trash-list" id="trashList"></div>
+    </div>
+</div>
+
 <!-- দাম সম্পাদনার গোপন ফর্ম -->
 <form id="editForm" method="POST" style="display:none;">
     <input type="hidden" name="action" value="edit_price">
@@ -941,10 +1151,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     <input type="hidden" name="new_access" id="editNewAccess">
 </form>
 
+<!-- বই রিসাইকেল বিনে (ফাইল মুছুন) পাঠানোর গোপন ফর্ম -->
+<form id="deleteBookForm" method="POST" action="index.php#bookList" style="display:none;">
+    <input type="hidden" name="action" value="delete_book">
+    <input type="hidden" name="book_id" id="deleteBookId">
+</form>
+
+<!-- রিসাইকেল বিন থেকে বই রিলোড করার গোপন ফর্ম -->
+<form id="restoreBookForm" method="POST" action="index.php#bookList" style="display:none;">
+    <input type="hidden" name="action" value="restore_book">
+    <input type="hidden" name="book_id" id="restoreBookId">
+</form>
+
+<!-- রিসাইকেল বিন থেকে চিরতরে মোছার গোপন ফর্ম -->
+<form id="permanentDeleteBookForm" method="POST" action="index.php#bookList" style="display:none;">
+    <input type="hidden" name="action" value="permanent_delete_book">
+    <input type="hidden" name="book_id" id="permanentDeleteBookId">
+</form>
+
 <script>
 const BOOKS = <?= json_encode(array_map(function ($b) {
     return ['title' => $b['title'], 'price' => $b['price'], 'access' => $b['access'], 'papers' => $b['papers'] ?? []];
 }, $books), JSON_UNESCAPED_UNICODE) ?>;
+const TRASH_BOOKS = <?= json_encode(array_map(function ($t) {
+    return ['id' => $t['id'] ?? '', 'title' => $t['title'] ?? '', 'author' => $t['author'] ?? '', 'deleted_at' => $t['deleted_at'] ?? ''];
+}, $trash), JSON_UNESCAPED_UNICODE) ?>;
+let lastClearedFullBookFile = null;
 
 function toggleUpload() {
     const p = document.getElementById('uploadPanel');
@@ -1003,6 +1235,137 @@ function editPrice(id) {
     document.getElementById('editNewAccess').value = na;
     document.getElementById('editForm').submit();
 }
+
+function updateFullBookFileUi() {
+    const input = document.getElementById('fullBookFileInput');
+    const status = document.getElementById('fullBookFileStatus');
+    if (!input || !status) return;
+    if (input.files && input.files.length > 0) {
+        const f = input.files[0];
+        lastClearedFullBookFile = null;
+        const kb = Math.max(1, Math.round(f.size / 1024));
+        status.textContent = 'নির্বাচিত ফাইল: ' + f.name + ' (' + kb + ' KB)';
+        status.style.color = '#166534';
+    } else {
+        status.textContent = 'কোনো ফাইল নির্বাচিত নেই।';
+        status.style.color = '#64748b';
+    }
+}
+
+function clearFullBookFile() {
+    const input = document.getElementById('fullBookFileInput');
+    const status = document.getElementById('fullBookFileStatus');
+    if (input && input.files && input.files.length > 0) {
+        lastClearedFullBookFile = input.files[0];
+    }
+    if (input) {
+        input.value = '';
+    }
+    if (status) {
+        status.textContent = 'নির্বাচিত ফাইলটি সরানো হয়েছে (বই রিলোড চাপলে আবার ফেরত পাওয়া যাবে)।';
+        status.style.color = '#b91c1c';
+    }
+}
+
+function handleUploadBoxReload() {
+    const input = document.getElementById('fullBookFileInput');
+    const status = document.getElementById('fullBookFileStatus');
+    if (lastClearedFullBookFile && input && (!input.files || input.files.length === 0)) {
+        try {
+            const dt = new DataTransfer();
+            dt.items.add(lastClearedFullBookFile);
+            input.files = dt.files;
+            updateFullBookFileUi();
+            if (status) {
+                status.textContent = 'রিলোড হয়েছে: ' + lastClearedFullBookFile.name;
+                status.style.color = '#047857';
+            }
+            lastClearedFullBookFile = null;
+            return;
+        } catch (e) {}
+    }
+    openTrashModal();
+}
+
+function deleteBook(id) {
+    const book = BOOKS[id];
+    const title = book ? book.title : id;
+    const msg = 'আপনি কি "' + title + '" বইটি তালিকা থেকে সরিয়ে রিসাইকেল বিনে (ফাইল মুছুন) রাখতে চান?\n\n'
+        + 'নিশ্চিত থাকুন: বইটির কোনো ফাইল বা ডট (.) হারাবে না। পরে "বই রিলোড" বাটনে ক্লিক করলেই অবিকল ফিরে আসবে।';
+    if (!confirm(msg)) return;
+    document.getElementById('deleteBookId').value = id;
+    document.getElementById('deleteBookForm').submit();
+}
+
+function restoreBook(id) {
+    document.getElementById('restoreBookId').value = id;
+    document.getElementById('restoreBookForm').submit();
+}
+
+function permanentDeleteBook(id, title) {
+    const msg = 'সতর্কতা: আপনি কি "' + title + '" বইটি রিসাইকেল বিন থেকে চিরতরে মুছে ফেলতে চান?\n\n'
+        + 'চিরতরে মুছলে এই বইয়ের .doc/.docx ফাইল, কভার ছবি ও লেখা মুছে যাবে (তবে ৫টি কাগজের ছবি, লেখকের ছবি, কোড ও মূল ফোল্ডার অক্ষত থাকবে)।';
+    if (!confirm(msg)) return;
+    document.getElementById('permanentDeleteBookId').value = id;
+    document.getElementById('permanentDeleteBookForm').submit();
+}
+
+function openTrashModal() {
+    const modal = document.getElementById('trashModal');
+    const list = document.getElementById('trashList');
+    if (!modal || !list) return;
+    list.innerHTML = '';
+
+    const entries = Object.values(TRASH_BOOKS || {});
+    if (entries.length === 0) {
+        list.innerHTML = '<div style="padding:24px; text-align:center; color:#64748b;">রিসাইকেল বিনে এখন কোনো মুছে ফেলা বই নেই।</div>';
+    } else {
+        entries.forEach((item) => {
+            const row = document.createElement('div');
+            row.className = 'trash-item';
+
+            const info = document.createElement('div');
+            info.className = 'trash-item-info';
+            const titleEl = document.createElement('strong');
+            titleEl.textContent = item.title || item.id;
+            const metaEl = document.createElement('small');
+            metaEl.textContent = (item.author ? item.author + ' • ' : '') + 'মুছে ফেলার সময়: ' + (item.deleted_at || '');
+            info.appendChild(titleEl);
+            info.appendChild(metaEl);
+
+            const actions = document.createElement('div');
+            actions.className = 'trash-item-actions';
+
+            const reloadBtn = document.createElement('button');
+            reloadBtn.type = 'button';
+            reloadBtn.className = 'btn-reload-book';
+            reloadBtn.textContent = '🔄 বই রিলোড';
+            reloadBtn.onclick = () => restoreBook(item.id);
+
+            const permBtn = document.createElement('button');
+            permBtn.type = 'button';
+            permBtn.className = 'btn-clear-file';
+            permBtn.textContent = '❌ চিরতরে মুছুন';
+            permBtn.onclick = () => permanentDeleteBook(item.id, item.title || item.id);
+
+            actions.appendChild(reloadBtn);
+            actions.appendChild(permBtn);
+            row.appendChild(info);
+            row.appendChild(actions);
+            list.appendChild(row);
+        });
+    }
+    modal.style.display = 'flex';
+}
+
+function closeTrashModal() {
+    const modal = document.getElementById('trashModal');
+    if (modal) modal.style.display = 'none';
+}
+
+document.getElementById('trashModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'trashModal') closeTrashModal();
+});
 
 document.getElementById('paperModal').addEventListener('click', (e) => {
     if (e.target.id === 'paperModal') closeModal();

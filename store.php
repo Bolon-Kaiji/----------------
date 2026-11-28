@@ -2,6 +2,7 @@
 // বই সংরক্ষণ: books.json-এ শুধু বইয়ের তথ্য (হালকা), অধ্যায়ের লেখা আলাদা ফাইলে (bookdata/<id>.json)।
 // ১০০+ বই হলেও হোমপেজ দ্রুত থাকে; শুধু যে বই পড়া হচ্ছে তারটাই লোড হয়।
 const BOOKS_INDEX = __DIR__ . '/books.json';
+const BOOKS_TRASH = __DIR__ . '/trash.json';
 const BOOKS_DATA_DIR = __DIR__ . '/bookdata';
 const FONTS_CONFIG = __DIR__ . '/fonts.json';
 
@@ -43,6 +44,17 @@ function saveBooks($books) {
     storeWrite(BOOKS_INDEX, $books);
 }
 
+function loadTrash() {
+    storeInit();
+    if (!file_exists(BOOKS_TRASH)) return [];
+    $trash = json_decode(file_get_contents(BOOKS_TRASH), true);
+    return is_array($trash) ? $trash : [];
+}
+
+function saveTrash($trash) {
+    storeWrite(BOOKS_TRASH, $trash);
+}
+
 function loadChapters($id) {
     $f = storeChaptersFile($id);
     $ch = file_exists($f) ? json_decode(file_get_contents($f), true) : null;
@@ -72,6 +84,186 @@ function addBook($id, $meta, $chapters) {
     $books[$id] = $meta;
     saveChapters($id, $chapters);
     saveBooks($books);
+}
+
+function storeNormalizeRelPath($path) {
+    $path = str_replace('\\', '/', trim((string)$path));
+    $path = ltrim($path, './');
+    return ltrim($path, '/');
+}
+
+function storeSafeUnlink($baseDir, $relPath, $stillReferenced = []) {
+    $norm = storeNormalizeRelPath($relPath);
+    if ($norm === '' || strpos($norm, '..') !== false) return false;
+    // শুধুমাত্র uploads/ ফোল্ডারের ভেতরের ফাইল মোছা হবে
+    if (strpos($norm, 'uploads/') !== 0) return false;
+    if (isset($stillReferenced[$norm])) return false;
+
+    $uploadsRoot = realpath($baseDir . '/uploads');
+    $abs = realpath($baseDir . '/' . $norm);
+    if ($uploadsRoot === false || $abs === false) return false;
+    if (strpos($abs, $uploadsRoot . DIRECTORY_SEPARATOR) !== 0) return false;
+    if (!is_file($abs)) return false;
+
+    return @unlink($abs);
+}
+
+function storeDeleteDirRecursive($dir, $allowedParentDir) {
+    $parentReal = realpath($allowedParentDir);
+    $dirReal = realpath($dir);
+    if ($parentReal === false || $dirReal === false) return 0;
+    if (strpos($dirReal, $parentReal . DIRECTORY_SEPARATOR) !== 0) return 0;
+    if (!is_dir($dirReal)) return 0;
+
+    $deleted = 0;
+    $items = @scandir($dirReal);
+    if (is_array($items)) {
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') continue;
+            $itemPath = $dirReal . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($itemPath)) {
+                $deleted += storeDeleteDirRecursive($itemPath, $parentReal);
+            } elseif (is_file($itemPath) || is_link($itemPath)) {
+                if (@unlink($itemPath)) $deleted++;
+            }
+        }
+    }
+    @rmdir($dirReal);
+    return $deleted;
+}
+
+// রিসাইকেল বিন: বইটি তালিকা থেকে সরিয়ে trash.json-এ হুবহু সংরক্ষণ করা (কোনো ফাইল বা ডেটা মোছা হয় না)
+function softDeleteBook($id) {
+    $id = (string)$id;
+    $books = loadBooks();
+    if ($id === '' || !isset($books[$id])) {
+        return ['ok' => false, 'title' => ''];
+    }
+
+    $book = $books[$id];
+    $title = (string)($book['title'] ?? $id);
+    unset($books[$id]);
+
+    $trash = loadTrash();
+    $trash[$id] = [
+        'id' => $id,
+        'title' => $title,
+        'author' => (string)($book['author'] ?? ''),
+        'deleted_at' => date('Y-m-d H:i:s'),
+        'meta' => $book,
+    ];
+
+    saveTrash($trash);
+    saveBooks($books);
+    return ['ok' => true, 'title' => $title];
+}
+
+// রিসাইকেল বিন থেকে বইটি হুবহু (একটি ডটও না হারিয়ে) ফিরিয়ে আনা
+function restoreBook($id) {
+    $id = (string)$id;
+    $trash = loadTrash();
+    if ($id === '' || !isset($trash[$id]) || empty($trash[$id]['meta']) || !is_array($trash[$id]['meta'])) {
+        return ['ok' => false, 'title' => ''];
+    }
+
+    $entry = $trash[$id];
+    $meta = $entry['meta'];
+    $title = (string)($meta['title'] ?? $entry['title'] ?? $id);
+    unset($trash[$id]);
+
+    $books = loadBooks();
+    $books[$id] = $meta;
+
+    saveBooks($books);
+    saveTrash($trash);
+    return ['ok' => true, 'title' => $title];
+}
+
+// চিরতরে মোছা: শুধুমাত্র রিসাইকেল বিন থেকে নিশ্চিত করলে নির্দিষ্ট বইয়ের ফাইল ও ডেটা মোছা হবে
+// (৫টি কাগজের ছবি, লেখকের ছবি, লোগো, কোড ও মূল ফোল্ডার কখনোই মোছা হবে না)
+function deleteBook($id, $baseDir = __DIR__) {
+    $id = (string)$id;
+    $books = loadBooks();
+    $trash = loadTrash();
+
+    $book = null;
+    if ($id !== '' && isset($trash[$id]['meta']) && is_array($trash[$id]['meta'])) {
+        $book = $trash[$id]['meta'];
+        unset($trash[$id]);
+    } elseif ($id !== '' && isset($books[$id])) {
+        $book = $books[$id];
+        unset($books[$id]);
+    } else {
+        return ['ok' => false, 'deleted_files' => 0, 'title' => ''];
+    }
+
+    $title = (string)($book['title'] ?? $id);
+
+    // সক্রিয় বই ও রিসাইকেল বিনের বাকি বইগুলোর ব্যবহৃত ফাইল সংগ্রহ করা
+    $stillReferenced = [];
+    $allRemaining = array_values($books);
+    foreach ($trash as $t) {
+        if (!empty($t['meta']) && is_array($t['meta'])) $allRemaining[] = $t['meta'];
+    }
+    foreach ($allRemaining as $other) {
+        if (!is_array($other)) continue;
+        foreach (['cover', 'author_img', 'full_book_file'] as $k) {
+            if (!empty($other[$k])) {
+                $stillReferenced[storeNormalizeRelPath($other[$k])] = true;
+            }
+        }
+        if (!empty($other['papers']) && is_array($other['papers'])) {
+            foreach ($other['papers'] as $p) {
+                if (!empty($p['image'])) {
+                    $stillReferenced[storeNormalizeRelPath($p['image'])] = true;
+                }
+            }
+        }
+        if (!empty($other['colophon']['logo'])) {
+            $stillReferenced[storeNormalizeRelPath($other['colophon']['logo'])] = true;
+        }
+    }
+
+    $deletedFiles = 0;
+    // শুধুমাত্র ওই নির্দিষ্ট বইয়ের ডকুমেন্ট ফাইল ও কভার ছবি মোছা হবে;
+    // ৫টি কাগজের ছবি (uploads/papers/*), লেখকের ছবি (uploads/authors/*) ও লোগো (samachar_logo.png) কখনোই মোছা হবে না।
+    $candidates = [];
+    foreach (['full_book_file', 'cover'] as $k) {
+        if (!empty($book[$k])) $candidates[] = $book[$k];
+    }
+
+    foreach (array_unique($candidates) as $rel) {
+        if (storeSafeUnlink($baseDir, $rel, $stillReferenced)) {
+            $deletedFiles++;
+        }
+    }
+
+    // docx থেকে নিষ্কাশিত বই-ভিত্তিক মিডিয়া ফোল্ডার: uploads/books/<book_id>/
+    $safeId = preg_replace('/[^A-Za-z0-9_]/', '', $id);
+    if ($safeId !== '') {
+        $bookMediaDir = $baseDir . '/uploads/books/' . $safeId;
+        if (is_dir($bookMediaDir)) {
+            $deletedFiles += storeDeleteDirRecursive($bookMediaDir, $baseDir . '/uploads/books');
+        }
+    }
+
+    // bookdata/<id>.json ও রেন্ডার/সার্চ ক্যাশ ফাইল মোছা
+    $chaptersFile = storeChaptersFile($id);
+    if (is_file($chaptersFile) && @unlink($chaptersFile)) {
+        $deletedFiles++;
+    }
+    if ($safeId !== '' && is_dir(BOOKS_DATA_DIR)) {
+        foreach (glob(BOOKS_DATA_DIR . '/' . $safeId . '_render_*') ?: [] as $f) {
+            if (is_file($f) && @unlink($f)) $deletedFiles++;
+        }
+        foreach (glob(BOOKS_DATA_DIR . '/' . $safeId . '_search_*') ?: [] as $f) {
+            if (is_file($f) && @unlink($f)) $deletedFiles++;
+        }
+    }
+
+    saveBooks($books);
+    saveTrash($trash);
+    return ['ok' => true, 'deleted_files' => $deletedFiles, 'title' => $title];
 }
 
 function loadFontConfig($book = null) {
